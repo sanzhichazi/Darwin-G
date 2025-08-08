@@ -159,13 +159,7 @@ export default function Page() {
               {"D"}
             </div>
             <div className="text-lg font-semibold tracking-tight">{"Darwin"}</div>
-            <span
-              className="ml-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
-              style={{ backgroundColor: "rgba(249, 217, 247, 0.35)", color: "#7a2c69" }}
-            >
-              <Sparkles className="h-3 w-3" />
-              {"AI Chat"}
-            </span>
+            
           </div>
           {/* WalletConnectButton moved to Sidebar */}
         </div>
