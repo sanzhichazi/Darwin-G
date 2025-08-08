@@ -351,6 +351,13 @@ export default function Page() {
             >
               <div className="flex flex-col gap-2">
                 <div className="flex items-end gap-2">
+                  <Textarea
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Type a message or drop files here…"
+                    className="min-h-[56px] max-h-[160px] resize-y"
+                  />
                   <label className="shrink-0 inline-flex items-center gap-2 text-sm text-muted-foreground cursor-pointer px-2 py-2 rounded-md hover:bg-muted">
                     <input
                       type="file"
@@ -361,13 +368,6 @@ export default function Page() {
                     <Paperclip className="h-4 w-4" />
                     <span className="hidden sm:inline">{"Add attachments"}</span>
                   </label>
-                  <Textarea
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Type a message or drop files here…"
-                    className="min-h-[56px] max-h-[160px] resize-y"
-                  />
                   <Button
                     onClick={onSend}
                     disabled={sending || (!input.trim() && files.length === 0)}
