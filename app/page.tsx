@@ -8,7 +8,7 @@ import {
 } from "ai";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Paperclip, Send, Sparkles, MessageSquare, Package, Megaphone } from 'lucide-react';
+import { Paperclip, Send, Sparkles } from 'lucide-react';
 import {
   MessageBubble,
   AttachmentChips,
@@ -17,7 +17,6 @@ import {
 import { cn } from "@/lib/utils";
 import { STORAGE_KEY } from "@/components/wallet-connect";
 import { Sidebar } from "@/components/sidebar"; // Import the new Sidebar component
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"; // Import Tabs components
 
 const BRAND_COLOR = "rgb(249, 217, 247)";
 
@@ -53,6 +52,7 @@ export default function Page() {
   const [sending, setSending] = React.useState(false);
   const [files, setFiles] = React.useState<AttachmentPreview[]>([]);
   const [drag, setDrag] = React.useState<DragState>("idle");
+  const [activeMainTab, setActiveMainTab] = React.useState<'chat' | 'products' | 'marketing'>('chat'); // State for active main content tab
 
   const messagesRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -172,28 +172,13 @@ export default function Page() {
       </header>
 
       <div className="flex flex-1 overflow-hidden"> {/* New flex container for sidebar and main content */}
-        <Sidebar /> {/* Render the new Sidebar component */}
+        <Sidebar onSelectTab={setActiveMainTab} activeTab={activeMainTab} /> {/* Render the new Sidebar component */}
 
-        {/* Main chat content */}
+        {/* Main content area */}
         <div className="flex-1 flex flex-col">
-          <Tabs defaultValue="chat" className="flex flex-col flex-1">
-            <TabsList className="grid w-full grid-cols-3 max-w-5xl mx-auto mt-4">
-              <TabsTrigger value="chat">
-                <MessageSquare className="h-4 w-4 mr-2" />
-                Chat
-              </TabsTrigger>
-              <TabsTrigger value="products">
-                <Package className="h-4 w-4 mr-2" />
-                Products
-              </TabsTrigger>
-              <TabsTrigger value="marketing">
-                <Megaphone className="h-4 w-4 mr-2" />
-                Marketing
-              </TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden">
-              <div className="flex-1 overflow-hidden">
+          {activeMainTab === 'chat' && (
+            <div className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 grid grid-rows-[1fr_auto] gap-4">
+              <div className="row-start-1 overflow-hidden">
                 <div
                   ref={messagesRef}
                   className="h-full overflow-y-auto p-4 sm:p-6"
@@ -411,9 +396,11 @@ export default function Page() {
                   </div>
                 </div>
               )}
-            </TabsContent>
+            </div>
+          )}
 
-            <TabsContent value="products" className="flex-1 flex flex-col p-6 overflow-y-auto">
+          {activeMainTab === 'products' && (
+            <div className="flex-1 flex flex-col p-6 overflow-y-auto mx-auto w-full max-w-5xl">
               <h2 className="text-xl font-semibold mb-4">Product Management</h2>
               <p className="text-muted-foreground mb-4">
                 Upload your product list, and Darwin will automatically generate optimized listings and publish them across supported e-commerce platforms.
@@ -421,9 +408,11 @@ export default function Page() {
               <div className="border rounded-lg p-4 bg-white flex-1 flex items-center justify-center text-center text-muted-foreground">
                 <p>Product listing and management features will appear here.</p>
               </div>
-            </TabsContent>
+            </div>
+          )}
 
-            <TabsContent value="marketing" className="flex-1 flex flex-col p-6 overflow-y-auto">
+          {activeMainTab === 'marketing' && (
+            <div className="flex-1 flex flex-col p-6 overflow-y-auto mx-auto w-full max-w-5xl">
               <h2 className="text-xl font-semibold mb-4">Marketing & Promotion</h2>
               <p className="text-muted-foreground mb-4">
                 Darwin designs and executes data-driven marketing strategies, auto-generates engaging promotional content, and builds content commerce funnels.
@@ -431,8 +420,8 @@ export default function Page() {
               <div className="border rounded-lg p-4 bg-white flex-1 flex items-center justify-center text-center text-muted-foreground">
                 <p>Marketing campaign and social media features will appear here.</p>
               </div>
-            </TabsContent>
-          </Tabs>
+            </div>
+          )}
         </div>
       </div>
 

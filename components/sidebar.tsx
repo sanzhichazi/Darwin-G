@@ -6,7 +6,13 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight, MessageSquare, Package, Megaphone } from 'lucide-react';
 
-export function Sidebar({ className }: { className?: string }) {
+type SidebarProps = {
+  className?: string;
+  onSelectTab: (tab: 'chat' | 'products' | 'marketing') => void;
+  activeTab: 'chat' | 'products' | 'marketing';
+};
+
+export function Sidebar({ className, onSelectTab, activeTab }: SidebarProps) {
   const [isCollapsed, setIsCollapsed] = React.useState(false);
 
   return (
@@ -19,12 +25,12 @@ export function Sidebar({ className }: { className?: string }) {
     >
       <div className="flex-1 overflow-y-auto p-4">
         <div className="flex items-center justify-between mb-4">
-          {!isCollapsed && <h2 className="text-lg font-semibold">Chats</h2>}
+          {!isCollapsed && <h2 className="text-lg font-semibold">Darwin</h2>}
           <Button
             variant="ghost"
             size="icon"
             onClick={() => setIsCollapsed(!isCollapsed)}
-            className="ml-auto"
+            className={cn("ml-auto", isCollapsed && "mx-auto")}
             aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
             {isCollapsed ? <ChevronRight className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
@@ -32,32 +38,28 @@ export function Sidebar({ className }: { className?: string }) {
         </div>
         <nav className="space-y-2">
           <Button
-            variant="ghost"
+            variant={activeTab === 'chat' ? "secondary" : "ghost"}
             className={cn("w-full justify-start", isCollapsed && "px-0 justify-center")}
+            onClick={() => onSelectTab('chat')}
           >
             <MessageSquare className={cn("h-5 w-5", !isCollapsed && "mr-2")} />
-            {!isCollapsed && "New Chat"}
+            {!isCollapsed && "Chat"}
           </Button>
           <Button
-            variant="ghost"
-            className={cn("w-full justify-start text-muted-foreground", isCollapsed && "px-0 justify-center")}
+            variant={activeTab === 'products' ? "secondary" : "ghost"}
+            className={cn("w-full justify-start", isCollapsed && "px-0 justify-center")}
+            onClick={() => onSelectTab('products')}
           >
-            <MessageSquare className={cn("h-5 w-5", !isCollapsed && "mr-2")} />
-            {!isCollapsed && "Previous Chat 1"}
+            <Package className={cn("h-5 w-5", !isCollapsed && "mr-2")} />
+            {!isCollapsed && "Products"}
           </Button>
           <Button
-            variant="ghost"
-            className={cn("w-full justify-start text-muted-foreground", isCollapsed && "px-0 justify-center")}
+            variant={activeTab === 'marketing' ? "secondary" : "ghost"}
+            className={cn("w-full justify-start", isCollapsed && "px-0 justify-center")}
+            onClick={() => onSelectTab('marketing')}
           >
-            <MessageSquare className={cn("h-5 w-5", !isCollapsed && "mr-2")} />
-            {!isCollapsed && "Previous Chat 2"}
-          </Button>
-          <Button
-            variant="ghost"
-            className={cn("w-full justify-start text-muted-foreground", isCollapsed && "px-0 justify-center")}
-          >
-            <MessageSquare className={cn("h-5 w-5", !isCollapsed && "mr-2")} />
-            {!isCollapsed && "Previous Chat 3"}
+            <Megaphone className={cn("h-5 w-5", !isCollapsed && "mr-2")} />
+            {!isCollapsed && "Marketing"}
           </Button>
         </nav>
       </div>
