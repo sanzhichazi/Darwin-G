@@ -63,7 +63,7 @@ export function Sidebar({ className, onSelectTab, activeTab }: SidebarProps) {
           </Button>
         </nav>
       </div>
-      <div className="p-4 border-t">
+      <div className="p-4 border-t-0">
         {/* Wallet connection button at the bottom */}
         <WalletConnectButton label={isCollapsed ? "" : "Connect Wallet"} className={cn("w-full", isCollapsed && "px-0 justify-center")} />
       </div>
