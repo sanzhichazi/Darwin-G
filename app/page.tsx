@@ -3,7 +3,6 @@
 import * as React from "react";
 import { useChat } from "@ai-sdk/react";
 import {
-  DefaultChatTransport,
   lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
 import { Button } from "@/components/ui/button";
@@ -16,6 +15,8 @@ import {
 } from "@/components/chat-bubbles";
 import { cn } from "@/lib/utils";
 import { STORAGE_KEY } from "@/components/wallet-connect";
+
+const CONVERSATION_ID_KEY = "darwin_conversation_id";
 import { Sidebar } from "@/components/sidebar"; // Import the new Sidebar component
 
 const BRAND_COLOR = "rgb(249, 217, 247)";
@@ -29,10 +30,19 @@ export default function Page() {
     addToolResult,
     // Automatically send after tool calls complete (Generative UI pattern)
   } = useChat({
-    transport: new DefaultChatTransport({
-      api: "/api/chat",
-    }),
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
+    onFinish: (message: any) => {
+      console.log('onFinish called with message:', message);
+      // Check if the message contains conversation ID data
+      if (message.data?.conversationId) {
+        const convId = message.data.conversationId;
+        if (convId !== conversationId) {
+          console.log('Captured conversation ID from finished message:', convId);
+          setConversationId(convId);
+          conversationIdRef.current = convId;
+        }
+      }
+    },
     // Example client-side tool handler (optional):
     async onToolCall({ toolCall }) {
       // You can run simple client-side tools. Here we just demo a stub handler.
@@ -53,8 +63,113 @@ export default function Page() {
   const [files, setFiles] = React.useState<AttachmentPreview[]>([]);
   const [drag, setDrag] = React.useState<DragState>("idle");
   const [activeMainTab, setActiveMainTab] = React.useState<'chat' | 'products' | 'marketing' | 'crm'>('chat'); // State for active main content tab
+  const [conversationId, setConversationId] = React.useState<string | undefined>(); // State for Dify conversation continuity
 
   const messagesRef = React.useRef<HTMLDivElement | null>(null);
+  const conversationIdRef = React.useRef<string | undefined>(undefined); // Ref to ensure we have the latest conversationId
+
+  // Load conversation ID from localStorage on mount
+  React.useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const savedConversationId = localStorage.getItem(CONVERSATION_ID_KEY);
+      if (savedConversationId && messages.length > 0) {
+        setConversationId(savedConversationId);
+        conversationIdRef.current = savedConversationId;
+        console.log("Loaded conversation ID from storage:", savedConversationId);
+      }
+    }
+  }, [messages.length]);
+
+  // Update ref and localStorage when conversationId changes
+  React.useEffect(() => {
+    conversationIdRef.current = conversationId;
+    if (typeof window !== 'undefined') {
+      if (conversationId) {
+        localStorage.setItem(CONVERSATION_ID_KEY, conversationId);
+        console.log("ConversationId updated and saved:", conversationId);
+      } else {
+        localStorage.removeItem(CONVERSATION_ID_KEY);
+        console.log("ConversationId cleared from storage");
+      }
+    }
+  }, [conversationId]);
+
+  // Add custom stream handling for conversation ID capture
+  React.useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const originalFetch = window.fetch;
+      
+      window.fetch = async (input, init) => {
+        const response = await originalFetch(input, init);
+        
+        // Only intercept chat API calls
+        if (typeof input === 'string' && input.includes('/api/chat') && init?.method === 'POST') {
+          console.log('Intercepting chat API call for conversation ID');
+          
+          // Clone response to avoid consuming the stream
+          const clonedResponse = response.clone();
+          
+          // Read the stream in background to extract conversation ID
+          setTimeout(async () => {
+            try {
+              const reader = clonedResponse.body?.getReader();
+              if (!reader) return;
+              
+              let buffer = '';
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                
+                buffer += new TextDecoder().decode(value);
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+                
+                for (const line of lines) {
+                  if (line.startsWith('data: ')) {
+                    const data = line.slice(6);
+                    if (data === '[DONE]') continue;
+                    
+                    try {
+                      const parsed = JSON.parse(data);
+                      if (parsed.type === 'data' && parsed.data?.conversationId) {
+                        const convId = parsed.data.conversationId;
+                        console.log('Intercepted conversation ID from stream:', convId);
+                        setConversationId(convId);
+                        conversationIdRef.current = convId;
+                        break;
+                      }
+                    } catch (e) {
+                      // Skip malformed JSON
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              console.log('Error reading conversation ID from stream:', e);
+            }
+          }, 0);
+        }
+        
+        return response;
+      };
+      
+      return () => {
+        window.fetch = originalFetch;
+      };
+    }
+  }, [conversationId]);
+
+  // Reset conversation when messages are cleared (new conversation)
+  React.useEffect(() => {
+    if (messages.length === 0) {
+      setConversationId(undefined);
+      conversationIdRef.current = undefined;
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem(CONVERSATION_ID_KEY);
+      }
+      console.log("Conversation reset - clearing conversation ID");
+    }
+  }, [messages.length]);
 
   React.useEffect(() => {
     const el = messagesRef.current;
@@ -124,11 +239,20 @@ export default function Page() {
 
     setSending(true);
     try {
+      // Use the ref to get the most current conversationId
+      const currentConversationId = conversationIdRef.current;
+      
+      console.log("Sending message with conversation ID:", currentConversationId);
+      
       // Generative UI Chatbot expects structured parts. The simplest is a single text part:
       await sendMessage({
         parts: [{ type: "text", text: input + attachmentSummary }],
-        // Add walletAddress to the data property of the user message
-        data: { walletAddress: currentWalletAddress },
+        ...(currentConversationId || currentWalletAddress ? {
+          data: { 
+            ...(currentWalletAddress && { walletAddress: currentWalletAddress }),
+            ...(currentConversationId && { conversationId: currentConversationId })
+          } as any
+        } : {})
       });
       setInput("");
       files.forEach((f) => f.url && URL.revokeObjectURL(f.url));
@@ -258,7 +382,7 @@ export default function Page() {
                                   case "input-available":
                                     return (
                                       <div key={callId}>
-                                        {part.input.message}
+                                        {(part.input as any)?.message}
                                         <div className="mt-2 flex gap-2">
                                           <Button
                                             size="sm"
@@ -292,7 +416,7 @@ export default function Page() {
                                   case "output-available":
                                     return (
                                       <div key={callId}>
-                                        Confirmation result: {String(part.output)}
+                                        Confirmation result: {String(part.output || '')}
                                       </div>
                                     );
                                   case "output-error":
@@ -308,7 +432,7 @@ export default function Page() {
                                   case "input-available":
                                     return <div key={callId}>Getting location...</div>;
                                   case "output-available":
-                                    return <div key={callId}>Location: {part.output}</div>;
+                                    return <div key={callId}>Location: {String(part.output || '')}</div>;
                                   case "output-error":
                                     return <div key={callId}>Error: {part.errorText}</div>;
                                 }
