@@ -347,7 +347,7 @@ export default function Page() {
 
               {messages.length > 0 && (
                 <div
-                  className={cn("p-3 sm:p-4", "border-t bg-background", "relative")}
+                  className={cn("p-3 sm:p-4 border-l border-b border-r", "border-t bg-background", "relative")}
                   onDragEnter={(e) => {
                     e.preventDefault();
                     setDrag("over");
