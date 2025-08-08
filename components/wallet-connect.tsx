@@ -16,8 +16,8 @@ type ConnectResult = {
   provider: "porto" | "injected" | "mock";
 };
 
-const STORAGE_KEY = "darwin1:wallet-address";
-const STORAGE_PROVIDER_KEY = "darwin1:wallet-provider";
+export const STORAGE_KEY = "darwin1:wallet-address";
+export const STORAGE_PROVIDER_KEY = "darwin1:wallet-provider";
 
 // Format address as 0x****...ABCD (showing last 4 chars per requirement "显示地址的后面几个数")
 function shortAddress(addr: string) {
@@ -154,13 +154,20 @@ export function WalletConnectButton(props: WalletConnectButtonProps) {
     );
   }
 
+  // If label is an empty string, it means the sidebar is collapsed, so hide the address text.
+  const showAddressText = label !== "";
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="secondary" className={cn("gap-2", className)}>
           <Wallet className="h-4 w-4" />
-          <span className="hidden sm:inline">{shortAddress(address)}</span>
-          <span className="sm:hidden">{shortAddress(address)}</span>
+          {showAddressText && (
+            <>
+              <span className="hidden sm:inline">{shortAddress(address)}</span>
+              <span className="sm:hidden">{shortAddress(address)}</span>
+            </>
+          )}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
