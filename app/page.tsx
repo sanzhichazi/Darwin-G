@@ -148,21 +148,7 @@ export default function Page() {
   return (
     <main className="min-h-dvh bg-neutral-50 flex flex-col">
       <header className="w-full border-b">
-        <div className="mx-auto max-w-5xl px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div
-              className="h-8 w-8 rounded-md flex items-center justify-center font-semibold"
-              style={{ backgroundColor: BRAND_COLOR, color: "#111" }}
-              aria-label="Darwin logo"
-              title="Darwin"
-            >
-              {"D"}
-            </div>
-            <div className="text-lg font-semibold tracking-tight">{"Darwin"}</div>
-            
-          </div>
-          {/* WalletConnectButton moved to Sidebar */}
-        </div>
+        
       </header>
 
       <div className="flex flex-1 overflow-hidden"> {/* New flex container for sidebar and main content */}
