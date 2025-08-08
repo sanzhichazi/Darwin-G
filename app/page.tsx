@@ -432,7 +432,7 @@ export default function Page() {
       <footer className="w-full border-t">
         <div className="mx-auto max-w-5xl px-4 py-3 text-xs text-muted-foreground flex items-center justify-between">
           <span>{"© "} {new Date().getFullYear()} {" Darwin"}</span>
-          <span>{"AI powered by OpenAI. Set OPENAI_API_KEY to enable responses."}</span>
+          <span>{"A Multi-Agent AI System for Autonomous E-commerce Operations\n"}</span>
         </div>
       </footer>
     </main>
