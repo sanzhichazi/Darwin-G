@@ -223,13 +223,8 @@ export default function Page() {
                               className="min-h-[120px] resize-y"
                             />
                             <div className="flex items-center justify-between mt-3">
-                              <Button
-                                variant="ghost"
-                                className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer px-2 py-2 rounded-md hover:bg-muted" // Keep original styling
-                                onClick={() => document.getElementById('file-input-top')?.click()} // Trigger file input click
-                              >
+                              <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
                                 <input
-                                  id="file-input-top" // Add unique ID for this input
                                   type="file"
                                   multiple
                                   className="hidden"
@@ -237,7 +232,7 @@ export default function Page() {
                                 />
                                 <Paperclip className="h-4 w-4" />
                                 {"Add attachments"}
-                              </Button>
+                              </label>
                               <Button
                                 onClick={onSend}
                                 disabled={sending || (!input.trim() && files.length === 0)}
@@ -347,7 +342,7 @@ export default function Page() {
 
               {messages.length > 0 && (
                 <div
-                  className={cn("p-3 sm:p-4", "border-t bg-background", "relative")}
+                  className={cn("p-3 sm:p-4 leading-3 border-l border-b border-r rounded-lg", "border-t bg-background", "relative")}
                   onDragEnter={(e) => {
                     e.preventDefault();
                     setDrag("over");
@@ -371,25 +366,20 @@ export default function Page() {
                         placeholder="Type a message or drop files here…"
                         className="min-h-[56px] max-h-[160px] resize-y"
                       />
-                      <Button
-                        variant="ghost"
-                        className="shrink-0 h-10 px-2 sm:px-4" // Ensure consistent height and padding
-                        onClick={() => document.getElementById('file-input-bottom')?.click()} // Trigger file input click
-                      >
+                      <label className="shrink-0 inline-flex items-center gap-2 text-sm text-muted-foreground cursor-pointer px-2 py-2 rounded-md hover:bg-muted">
                         <input
-                          id="file-input-bottom" // Add unique ID for this input
                           type="file"
                           multiple
                           className="hidden"
                           onChange={(e) => onFilesSelected(e.target.files)}
                         />
                         <Paperclip className="h-4 w-4" />
-                        <span className="hidden sm:inline ml-2">{"Add attachments"}</span> {/* Add ml-2 for spacing */}
-                      </Button>
+                        <span className="hidden sm:inline">{"Add attachments"}</span>
+                      </label>
                       <Button
                         onClick={onSend}
                         disabled={sending || (!input.trim() && files.length === 0)}
-                        className="shrink-0 h-10" // Ensure consistent height
+                        className="shrink-0"
                       >
                         <Send className="h-4 w-4" />
                       </Button>
