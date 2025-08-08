@@ -52,7 +52,7 @@ export default function Page() {
   const [sending, setSending] = React.useState(false);
   const [files, setFiles] = React.useState<AttachmentPreview[]>([]);
   const [drag, setDrag] = React.useState<DragState>("idle");
-  const [activeMainTab, setActiveMainTab] = React.useState<'chat' | 'products' | 'marketing'>('chat'); // State for active main content tab
+  const [activeMainTab, setActiveMainTab] = React.useState<'chat' | 'products' | 'marketing' | 'crm'>('chat'); // State for active main content tab
 
   const messagesRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -409,6 +409,18 @@ export default function Page() {
               </p>
               <div className="border rounded-lg p-4 bg-white flex-1 flex items-center justify-center text-center text-muted-foreground">
                 <p>Marketing campaign and social media features will appear here.</p>
+              </div>
+            </div>
+          )}
+
+          {activeMainTab === 'crm' && (
+            <div className="flex-1 flex flex-col p-6 overflow-y-auto mx-auto w-full max-w-5xl">
+              <h2 className="text-xl font-semibold mb-4">CRM User Management</h2>
+              <p className="text-muted-foreground mb-4">
+                Manage your buyer information, track interactions, and analyze customer data to enhance your e-commerce operations.
+              </p>
+              <div className="border rounded-lg p-4 bg-white flex-1 flex items-center justify-center text-center text-muted-foreground">
+                <p>Buyer management features will appear here.</p>
               </div>
             </div>
           )}

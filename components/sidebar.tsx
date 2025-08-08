@@ -4,12 +4,12 @@ import * as React from "react";
 import WalletConnectButton from "@/components/wallet-connect";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, MessageSquare, Package, Megaphone } from 'lucide-react';
+import { ChevronLeft, ChevronRight, MessageSquare, Package, Megaphone, Users } from 'lucide-react';
 
 type SidebarProps = {
   className?: string;
-  onSelectTab: (tab: 'chat' | 'products' | 'marketing') => void;
-  activeTab: 'chat' | 'products' | 'marketing';
+  onSelectTab: (tab: 'chat' | 'products' | 'marketing' | 'crm') => void;
+  activeTab: 'chat' | 'products' | 'marketing' | 'crm';
 };
 
 export function Sidebar({ className, onSelectTab, activeTab }: SidebarProps) {
@@ -60,6 +60,14 @@ export function Sidebar({ className, onSelectTab, activeTab }: SidebarProps) {
           >
             <Megaphone className={cn("h-5 w-5", !isCollapsed && "mr-2")} />
             {!isCollapsed && "Marketing"}
+          </Button>
+          <Button
+            variant={activeTab === 'crm' ? "secondary" : "ghost"}
+            className={cn("w-full justify-start", isCollapsed && "px-0 justify-center")}
+            onClick={() => onSelectTab('crm')}
+          >
+            <Users className={cn("h-5 w-5", !isCollapsed && "mr-2")} />
+            {!isCollapsed && "CRM"}
           </Button>
         </nav>
       </div>
