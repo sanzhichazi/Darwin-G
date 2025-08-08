@@ -342,7 +342,7 @@ export default function Page() {
                   }}
                   onDrop={onDrop}
                 >
-                  <div className="flex flex-col gap-2 px-3 sm:px-4">
+                  <div className="flex flex-col gap-2 px-3 sm:px-4 py-4">
                     <div className="flex items-end gap-2">
                       <Textarea
                         value={input}
