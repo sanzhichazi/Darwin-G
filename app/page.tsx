@@ -353,18 +353,17 @@ export default function Page() {
                       />
                       <Button
                         variant="ghost"
-                        className="shrink-0 h-10 px-2 sm:px-4" // Ensure consistent height and padding
-                        onClick={() => document.getElementById('file-input-bottom')?.click()} // Trigger file input click
+                        className="shrink-0 h-10 px-2 sm:px-4"
+                        onClick={() => document.getElementById('file-input-bottom')?.click()}
                       >
                         <input
-                          id="file-input-bottom" // Add unique ID for this input
+                          id="file-input-bottom"
                           type="file"
                           multiple
                           className="hidden"
                           onChange={(e) => onFilesSelected(e.target.files)}
                         />
                         <Paperclip className="h-4 w-4" />
-                        <span className="hidden sm:inline ml-2">{"Add attachments"}</span> {/* Add ml-2 for spacing */}
                       </Button>
                       <Button
                         onClick={onSend}
