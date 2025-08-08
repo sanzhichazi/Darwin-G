@@ -154,13 +154,20 @@ export function WalletConnectButton(props: WalletConnectButtonProps) {
     );
   }
 
+  // If label is an empty string, it means the sidebar is collapsed, so hide the address text.
+  const showAddressText = label !== "";
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="secondary" className={cn("gap-2", className)}>
           <Wallet className="h-4 w-4" />
-          <span className="hidden sm:inline">{shortAddress(address)}</span>
-          <span className="sm:hidden">{shortAddress(address)}</span>
+          {showAddressText && (
+            <>
+              <span className="hidden sm:inline">{shortAddress(address)}</span>
+              <span className="sm:hidden">{shortAddress(address)}</span>
+            </>
+          )}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
