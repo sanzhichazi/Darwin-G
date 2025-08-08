@@ -16,6 +16,7 @@ import {
   type AttachmentPreview,
 } from "@/components/chat-bubbles";
 import { cn } from "@/lib/utils";
+import { STORAGE_KEY } from "@/components/wallet-connect";
 
 const BRAND_COLOR = "rgb(249, 217, 247)";
 
@@ -117,11 +118,16 @@ export default function Page() {
             .join("\n")
         : "";
 
+    // Get the current wallet address from localStorage
+    const currentWalletAddress = localStorage.getItem(STORAGE_KEY);
+
     setSending(true);
     try {
       // Generative UI Chatbot expects structured parts. The simplest is a single text part:
       await sendMessage({
         parts: [{ type: "text", text: input + attachmentSummary }],
+        // Add walletAddress to the data property of the user message
+        data: { walletAddress: currentWalletAddress },
       });
       setInput("");
       files.forEach((f) => f.url && URL.revokeObjectURL(f.url));

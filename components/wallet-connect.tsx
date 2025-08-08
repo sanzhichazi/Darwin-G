@@ -16,8 +16,8 @@ type ConnectResult = {
   provider: "porto" | "injected" | "mock";
 };
 
-const STORAGE_KEY = "darwin1:wallet-address";
-const STORAGE_PROVIDER_KEY = "darwin1:wallet-provider";
+export const STORAGE_KEY = "darwin1:wallet-address";
+export const STORAGE_PROVIDER_KEY = "darwin1:wallet-provider";
 
 // Format address as 0x****...ABCD (showing last 4 chars per requirement "显示地址的后面几个数")
 function shortAddress(addr: string) {
