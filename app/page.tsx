@@ -327,7 +327,7 @@ export default function Page() {
 
               {messages.length > 0 && (
                 <div
-                  className={cn("p-3 sm:p-4 border-b border-l-0 border-r-0", "border-t bg-background", "relative")}
+                  className={cn("border-b border-l-0 border-r-0", "border-t bg-background", "relative")}
                   onDragEnter={(e) => {
                     e.preventDefault();
                     setDrag("over");
@@ -342,7 +342,7 @@ export default function Page() {
                   }}
                   onDrop={onDrop}
                 >
-                  <div className="flex flex-col gap-2">
+                  <div className="flex flex-col gap-2 px-3 sm:px-4">
                     <div className="flex items-end gap-2">
                       <Textarea
                         value={input}
