@@ -157,7 +157,7 @@ export default function Page() {
         {/* Main content area */}
         <div className="flex-1 flex flex-col">
           {activeMainTab === 'chat' && (
-            <div className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 grid grid-rows-[1fr_auto] gap-4">
+            <div className="mx-auto w-full max-w-5xl flex-1 grid grid-rows-[1fr_auto] gap-4 px-0 py-[opx]">
               <div className="row-start-1 overflow-hidden">
                 <div
                   ref={messagesRef}
