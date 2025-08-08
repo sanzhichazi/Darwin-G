@@ -27,6 +27,19 @@ async function canReachDify() {
 export async function POST(req: Request) {
   const { messages }: { messages: UIMessage[] } = await req.json();
 
+  let walletAddress: string | undefined;
+
+  // Find the last user message and extract walletAddress from its data
+  const lastUserMessage = messages.findLast((m) => m.role === "user");
+  if (lastUserMessage && lastUserMessage.data && typeof lastUserMessage.data.walletAddress === 'string') {
+    walletAddress = lastUserMessage.data.walletAddress;
+    // Optionally, remove the walletAddress from the message data if it's not for the model
+    // This might not be necessary as convertToModelMessages usually filters out unknown data.
+    delete lastUserMessage.data.walletAddress;
+  }
+
+  console.log("Received wallet address:", walletAddress); // You can use this address for logging, database operations, etc.
+
   // Decide provider: default to OpenAI; use Dify only if the endpoint is reachable.
   const useDify = await canReachDify();
   const provider = useDify
