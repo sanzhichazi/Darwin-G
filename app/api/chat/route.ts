@@ -1,8 +1,8 @@
 import { openai } from "@ai-sdk/openai";
 import { streamText, convertToModelMessages, type UIMessage } from "ai";
 
-// Allow streaming responses up to 30 seconds
-export const maxDuration = 30;
+// Allow streaming responses up to 2 minutes to accommodate longer Dify runs
+export const maxDuration = 120;
 
 // Prefer Dify; fallback to OpenAI if needed.
 const DIFY_API_KEY = process.env.DIFY_API_KEY;
@@ -19,27 +19,39 @@ async function canReachDify() {
 }
 
 export async function POST(req: Request) {
-  const { messages }: { messages: UIMessage[] } = await req.json();
+  try {
+    const { messages, files }: { messages: UIMessage[], files?: any[] } = await req.json();
 
-  let walletAddress: string | undefined;
-  let conversationId: string | undefined;
+    let walletAddress: string | undefined;
+    let conversationId: string | undefined;
 
-  // Find the last user message and extract walletAddress and conversationId from its data
-  const lastUserMessage = messages.findLast((m) => m.role === "user");
-  if (lastUserMessage && (lastUserMessage as any).data) {
-    const messageData = (lastUserMessage as any).data;
-    if (typeof messageData.walletAddress === 'string') {
-      walletAddress = messageData.walletAddress;
-      // Don't delete walletAddress as it might be needed
+    // Find the last user message and extract walletAddress, conversationId, and files from its data
+    const lastUserMessage = messages.findLast((m) => m.role === "user");
+    let extractedFiles: any[] = files || []; // Start with files from direct parameter
+    
+    if (lastUserMessage && (lastUserMessage as any).data) {
+      const messageData = (lastUserMessage as any).data;
+      if (typeof messageData.walletAddress === 'string') {
+        walletAddress = messageData.walletAddress;
+      }
+      if (typeof messageData.conversationId === 'string') {
+        conversationId = messageData.conversationId;
+      }
+      if (Array.isArray(messageData.files) && messageData.files.length > 0) {
+        extractedFiles = [...extractedFiles, ...messageData.files];
+        console.log("Extracted files from message data:", messageData.files);
+      }
     }
-    if (typeof messageData.conversationId === 'string') {
-      conversationId = messageData.conversationId;
-      // Don't delete conversationId as it might be needed
-    }
-  }
 
-  console.log("Received wallet address:", walletAddress);
-  console.log("Received conversation ID:", conversationId);
+    console.log("Received wallet address:", walletAddress);
+    console.log("Received conversation ID:", conversationId);
+    console.log("Final files to send to Dify:", extractedFiles);
+
+    // Validate required environment variables
+    if (!DIFY_API_KEY) {
+      console.error("DIFY_API_KEY is not configured");
+      throw new Error("AI service configuration is missing");
+    }
 
   // Decide provider: prefer Dify; use OpenAI as fallback.
   const useDify = await canReachDify();
@@ -49,6 +61,55 @@ export async function POST(req: Request) {
     const lastMessage = messages[messages.length - 1];
     const query = lastMessage?.parts?.find(p => p.type === 'text')?.text || '';
     
+    if (!query.trim()) {
+      throw new Error("Message content is required");
+    }
+
+    // Prepare the request body according to Dify API documentation
+    const requestBody: any = {
+      query: query,
+      inputs: {}, // Key/value pairs for app variables
+      response_mode: "streaming",
+      user: walletAddress || "web-user",
+      auto_generate_name: true
+    };
+
+    // Add conversation_id if available
+    if (conversationId) {
+      requestBody.conversation_id = conversationId;
+    }
+
+    // Add files if available - validate file format according to Dify spec
+    if (extractedFiles && extractedFiles.length > 0) {
+      const validatedFiles = extractedFiles.filter(file => {
+        // Validate required fields according to Dify documentation
+        if (!file.type || !file.transfer_method) {
+          console.warn("Invalid file structure - missing type or transfer_method:", file);
+          return false;
+        }
+        
+        // Validate transfer method specific requirements
+        if (file.transfer_method === 'local_file' && !file.upload_file_id) {
+          console.warn("Local file missing upload_file_id:", file);
+          return false;
+        }
+        
+        if (file.transfer_method === 'remote_url' && !file.url) {
+          console.warn("Remote file missing URL:", file);
+          return false;
+        }
+        
+        return true;
+      });
+      
+      if (validatedFiles.length > 0) {
+        requestBody.files = validatedFiles;
+        console.log("Sending validated files to Dify:", validatedFiles);
+      }
+    }
+
+    console.log("Dify request body:", JSON.stringify(requestBody, null, 2));
+    
     try {
       const response = await fetch(`${DIFY_API_BASE_URL.replace(/\/$/, "")}/chat-messages`, {
         method: "POST",
@@ -56,17 +117,69 @@ export async function POST(req: Request) {
           "Authorization": `Bearer ${DIFY_API_KEY}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          inputs: {},
-          query: query,
-          response_mode: "streaming", // Use streaming to get all messages including tool responses
-          user: walletAddress || "web-user",
-          ...(conversationId && { conversation_id: conversationId }), // Include conversation_id if available
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (!response.ok) {
-        throw new Error(`Dify API error: ${response.status}`);
+        let errorMessage = 'AI service is temporarily unavailable. Please try again.';
+        
+        try {
+          const errorData = await response.json();
+          // Handle Dify API error format: { status, code, message }
+          if (errorData.message) {
+            errorMessage = errorData.message;
+          }
+          console.error('Dify API error:', errorData);
+        } catch (parseError) {
+          const errorText = await response.text().catch(() => 'Unknown error');
+          console.error('Dify API error (text):', response.status, errorText);
+        }
+        
+        // Customize error messages based on status codes
+        if (response.status === 401 || response.status === 403) {
+          errorMessage = 'Authentication failed. Please check your API configuration.';
+        } else if (response.status === 429) {
+          errorMessage = 'Rate limit exceeded. Please wait a moment and try again.';
+        } else if (response.status === 400) {
+          errorMessage = errorMessage || 'Invalid request. Please check your input and try again.';
+        } else if (response.status === 404) {
+          errorMessage = errorMessage || 'Conversation not found. Starting a new conversation.';
+        } else if (response.status >= 500) {
+          errorMessage = errorMessage || 'AI service is experiencing issues. Please try again later.';
+        }
+        
+        // Return error as streaming response in the same format as successful responses
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              const messageId = `error_${Date.now()}`;
+              
+              // Send error message in streaming format compatible with useChat
+              controller.enqueue(new TextEncoder().encode(`data: {"type":"start"}\\n\\n`));
+              controller.enqueue(new TextEncoder().encode(`data: {"type":"start-step"}\\n\\n`));
+              controller.enqueue(new TextEncoder().encode(`data: {"type":"text-start","id":"${messageId}"}\\n\\n`));
+              
+              const errorText = `❌ **Error:** ${errorMessage}`;
+              const escapedError = JSON.stringify(errorText);
+              controller.enqueue(new TextEncoder().encode(`data: {"type":"text-delta","id":"${messageId}","delta":${escapedError}}\\n\\n`));
+              
+              controller.enqueue(new TextEncoder().encode(`data: {"type":"text-end","id":"${messageId}"}\\n\\n`));
+              controller.enqueue(new TextEncoder().encode(`data: {"type":"finish-step"}\\n\\n`));
+              controller.enqueue(new TextEncoder().encode(`data: {"type":"finish"}\\n\\n`));
+              controller.enqueue(new TextEncoder().encode(`data: [DONE]\\n\\n`));
+              
+              controller.close();
+            }
+          }),
+          {
+            headers: {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              'Connection': 'keep-alive',
+              'x-vercel-ai-ui-message-stream': 'v1',
+            }
+          }
+        );
       }
 
       // Handle the streaming response from Dify
@@ -84,6 +197,7 @@ export async function POST(req: Request) {
             let hasStarted = false;
             let streamingContent = '';
             let capturedConversationId: string | undefined;
+            let capturedTaskId: string | undefined;
 
             try {
               // Send initial start sequence
@@ -91,7 +205,24 @@ export async function POST(req: Request) {
               controller.enqueue(new TextEncoder().encode(`data: {"type":"start-step"}\n\n`));
 
               while (true) {
-                const { done, value } = await reader.read();
+                let readResult;
+                try {
+                  readResult = await reader.read();
+                } catch (readError) {
+                  console.error('Stream reading error:', readError);
+                  
+                  if (!hasStarted) {
+                    controller.enqueue(new TextEncoder().encode(`data: {"type":"text-start","id":"${messageId}"}\n\n`));
+                    hasStarted = true;
+                  }
+                  
+                  const errorText = `❌ **Connection Error:** Stream was interrupted. Please try again.`;
+                  const escapedError = JSON.stringify(errorText);
+                  controller.enqueue(new TextEncoder().encode(`data: {"type":"text-delta","id":"${messageId}","delta":${escapedError}}\n\n`));
+                  break;
+                }
+                
+                const { done, value } = readResult;
                 if (done) break;
 
                 buffer += new TextDecoder().decode(value, { stream: true });
@@ -107,16 +238,29 @@ export async function POST(req: Request) {
                     
                     try {
                       const parsed = JSON.parse(data);
+                      // Only log non-message events to reduce verbosity
+                      if (parsed.event !== 'message') {
+                        console.log("Dify stream event:", parsed.event, parsed);
+                      }
                       
-                      // Capture conversation_id from any response that contains it
+                      // Capture conversation_id and task_id from any response that contains them
                       if (parsed.conversation_id && !capturedConversationId) {
                         capturedConversationId = parsed.conversation_id;
                         console.log("Captured conversation ID from Dify:", capturedConversationId);
                       }
                       
-                      // Stream message events as they come for real-time response
+                      if (parsed.task_id && !capturedTaskId) {
+                        capturedTaskId = parsed.task_id;
+                        console.log("Captured task ID from Dify:", capturedTaskId);
+                        
+                        // Use AI SDK-compatible data-* event with data payload
+                        controller.enqueue(new TextEncoder().encode(`data: {"type":"data-task-id","data":{"taskId":"${capturedTaskId}"}}\n\n`));
+                      }
+                      
+                      // Handle different Dify stream events
                       if (parsed.event === 'message' && parsed.answer) {
                         if (!hasStarted) {
+                          console.log("Dify streaming started, task_id:", capturedTaskId);
                           controller.enqueue(new TextEncoder().encode(`data: {"type":"text-start","id":"${messageId}"}\n\n`));
                           hasStarted = true;
                         }
@@ -125,6 +269,69 @@ export async function POST(req: Request) {
                         const escapedAnswer = JSON.stringify(parsed.answer);
                         controller.enqueue(new TextEncoder().encode(`data: {"type":"text-delta","id":"${messageId}","delta":${escapedAnswer}}\n\n`));
                         streamingContent += parsed.answer;
+                      }
+                      
+                      // Handle agent_log events with streaming output
+                      else if (parsed.event === 'agent_log' && parsed.data && parsed.data.data && parsed.data.data.output && parsed.data.status === 'success') {
+                        const output = parsed.data.data.output;
+                        if (typeof output === 'string' && output.trim()) {
+                          if (!hasStarted) {
+                            console.log("Dify agent streaming started, task_id:", capturedTaskId);
+                            controller.enqueue(new TextEncoder().encode(`data: {"type":"text-start","id":"${messageId}"}\n\n`));
+                            hasStarted = true;
+                          }
+                          
+                          // Only stream new content that we haven't seen before
+                          if (output.length > streamingContent.length && output.startsWith(streamingContent)) {
+                            const newContent = output.substring(streamingContent.length);
+                            const escapedNewContent = JSON.stringify(newContent);
+                            controller.enqueue(new TextEncoder().encode(`data: {"type":"text-delta","id":"${messageId}","delta":${escapedNewContent}}\n\n`));
+                            streamingContent = output;
+                          } else if (streamingContent.length === 0) {
+                            // First chunk of content
+                            const escapedOutput = JSON.stringify(output);
+                            controller.enqueue(new TextEncoder().encode(`data: {"type":"text-delta","id":"${messageId}","delta":${escapedOutput}}\n\n`));
+                            streamingContent = output;
+                          }
+                        }
+                      }
+                      
+                      // Handle error events from Dify - check various error conditions
+                      else if (
+                        parsed.event === 'error' || 
+                        parsed.event === 'message_end' && parsed.metadata && parsed.metadata.error ||
+                        parsed.event === 'workflow_finished' && parsed.data && parsed.data.status === 'failed' ||
+                        parsed.status === 'failed' ||
+                        (parsed.data && parsed.data.error) ||
+                        (parsed.error)
+                      ) {
+                        console.log("Detected Dify error event:", parsed);
+                        
+                        let errorMessage = 'An error occurred during processing';
+                        
+                        if (parsed.message) errorMessage = parsed.message;
+                        else if (parsed.metadata?.error?.message) errorMessage = parsed.metadata.error.message;
+                        else if (parsed.data?.error?.message) errorMessage = parsed.data.error.message;
+                        else if (parsed.error?.message) errorMessage = parsed.error.message;
+                        else if (parsed.data?.error) errorMessage = String(parsed.data.error);
+                        else if (parsed.error) errorMessage = String(parsed.error);
+                        
+                        if (!hasStarted) {
+                          controller.enqueue(new TextEncoder().encode(`data: {"type":"text-start","id":"${messageId}"}\n\n`));
+                          hasStarted = true;
+                        }
+                        
+                        const errorText = `\n❌ Error: ${errorMessage}`;
+                        const escapedError = JSON.stringify(errorText);
+                        controller.enqueue(new TextEncoder().encode(`data: {"type":"text-delta","id":"${messageId}","delta":${escapedError}}\n\n`));
+                        
+                        // End the stream on error
+                        controller.enqueue(new TextEncoder().encode(`data: {"type":"text-end","id":"${messageId}"}\n\n`));
+                        controller.enqueue(new TextEncoder().encode(`data: {"type":"finish-step"}\n\n`));
+                        controller.enqueue(new TextEncoder().encode(`data: {"type":"finish"}\n\n`));
+                        controller.enqueue(new TextEncoder().encode(`data: [DONE]\n\n`));
+                        controller.close();
+                        return;
                       }
                       
                       // Also handle workflow_finished as backup for complete response
@@ -151,9 +358,10 @@ export async function POST(req: Request) {
                           controller.enqueue(new TextEncoder().encode(`data: {"type":"text-end","id":"${messageId}"}\n\n`));
                         }
                         
-                        // Include conversation_id in the final message data
+                        // Include conversation_id in the final message metadata
                         if (capturedConversationId) {
-                          controller.enqueue(new TextEncoder().encode(`data: {"type":"data","data":{"conversationId":"${capturedConversationId}"}}\n\n`));
+                          // Use AI SDK-compatible data-* event with data payload
+                          controller.enqueue(new TextEncoder().encode(`data: {"type":"data-conversation-id","data":{"conversationId":"${capturedConversationId}"}}\n\n`));
                         }
                         
                         controller.enqueue(new TextEncoder().encode(`data: {"type":"finish-step"}\n\n`));
@@ -173,12 +381,42 @@ export async function POST(req: Request) {
               
               // Fallback if connection ends without workflow_finished
               if (hasStarted) {
+                console.log('Dify stream completed normally');
+                controller.enqueue(new TextEncoder().encode(`data: {"type":"text-end","id":"${messageId}"}\n\n`));
+              } else {
+                // No content was received at all, show error message
+                console.log('No content received from Dify, sending error message');
+                controller.enqueue(new TextEncoder().encode(`data: {"type":"text-start","id":"${messageId}"}\n\n`));
+                const errorText = `\n❌ Error: The AI service didn't provide a response. Please try again.`;
+                const escapedError = JSON.stringify(errorText);
+                controller.enqueue(new TextEncoder().encode(`data: {"type":"text-delta","id":"${messageId}","delta":${escapedError}}\n\n`));
                 controller.enqueue(new TextEncoder().encode(`data: {"type":"text-end","id":"${messageId}"}\n\n`));
               }
               
-              // Include conversation_id in the final message data
+              // Include conversation_id in the final message metadata
               if (capturedConversationId) {
-                controller.enqueue(new TextEncoder().encode(`data: {"type":"data","data":{"conversationId":"${capturedConversationId}"}}\n\n`));
+                // Use AI SDK-compatible data-* event with data payload
+                controller.enqueue(new TextEncoder().encode(`data: {"type":"data-conversation-id","data":{"conversationId":"${capturedConversationId}"}}\n\n`));
+              }
+              
+              controller.enqueue(new TextEncoder().encode(`data: {"type":"finish-step"}\n\n`));
+              controller.enqueue(new TextEncoder().encode(`data: {"type":"finish"}\n\n`));
+              controller.enqueue(new TextEncoder().encode(`data: [DONE]\n\n`));
+              
+            } catch (streamError) {
+              console.error('Streaming error:', streamError);
+              
+              // Send error message if stream fails
+              if (!hasStarted) {
+                controller.enqueue(new TextEncoder().encode(`data: {"type":"text-start","id":"${messageId}"}\n\n`));
+              }
+              
+              const errorText = `❌ **Stream Error:** Connection to AI service failed. Please try again.`;
+              const escapedError = JSON.stringify(errorText);
+              controller.enqueue(new TextEncoder().encode(`data: {"type":"text-delta","id":"${messageId}","delta":${escapedError}}\n\n`));
+              
+              if (!hasStarted) {
+                controller.enqueue(new TextEncoder().encode(`data: {"type":"text-end","id":"${messageId}"}\n\n`));
               }
               
               controller.enqueue(new TextEncoder().encode(`data: {"type":"finish-step"}\n\n`));
@@ -201,16 +439,52 @@ export async function POST(req: Request) {
       );
 
     } catch (error) {
-      console.log('Dify API failed, falling back to OpenAI');
+      console.error('Dify API failed:', error);
       // Fall through to OpenAI fallback
     }
   }
 
   // Fallback to OpenAI
-  const result = streamText({
-    model: openai("gpt-4o-mini"),
-    messages: convertToModelMessages(messages),
-  });
+  try {
+    console.log("Using OpenAI fallback");
+    const result = streamText({
+      model: openai("gpt-4o-mini"),
+      messages: convertToModelMessages(messages),
+    });
 
-  return result.toUIMessageStreamResponse();
+    return result.toUIMessageStreamResponse();
+  } catch (openaiError) {
+    console.error('OpenAI fallback also failed:', openaiError);
+    
+    // Return a proper error response
+    return new Response(
+      JSON.stringify({
+        error: 'Both AI services are currently unavailable. Please try again later.',
+        details: openaiError instanceof Error ? openaiError.message : 'Unknown error'
+      }),
+      {
+        status: 500,
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      }
+    );
+  }
+
+  } catch (requestError) {
+    console.error('Request processing error:', requestError);
+    
+    return new Response(
+      JSON.stringify({
+        error: 'Failed to process request. Please check your input and try again.',
+        details: requestError instanceof Error ? requestError.message : 'Unknown error'
+      }),
+      {
+        status: 400,
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      }
+    );
+  }
 }

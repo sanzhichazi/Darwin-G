@@ -11,8 +11,12 @@ export type AttachmentPreview = {
   name: string;
   size: number;
   type: string;
-  url?: string; // object URL for images
+  url?: string; // object URL for images or direct URL for URL files
   textSample?: string; // snippet for text files
+  originalFile?: File; // store original file for upload
+  isUrl?: boolean; // indicates if this is a URL file
+  fileUrl?: string; // the actual file URL
+  difyFileType?: string; // file type for Dify API
 };
 
 export function MessageBubble({
@@ -26,6 +30,23 @@ export function MessageBubble({
 }) {
   const isUser = role === "user";
   const isAssistant = role === "assistant";
+  
+  // Helper function to recursively extract text from React elements
+  const extractTextFromElement = React.useCallback((element: React.ReactElement): string => {
+    if (typeof (element.props as any)?.children === 'string') {
+      return (element.props as any).children;
+    }
+    if (Array.isArray((element.props as any)?.children)) {
+      return (element.props as any).children
+        .map((child: any) => {
+          if (typeof child === 'string') return child;
+          if (React.isValidElement(child)) return extractTextFromElement(child);
+          return '';
+        })
+        .join('');
+    }
+    return '';
+  }, []);
   
   // Convert children to string for markdown rendering if it's from assistant
   const content = React.useMemo(() => {
@@ -63,7 +84,15 @@ export function MessageBubble({
     }
     
     return null;
-  }, [children, isAssistant]);
+  }, [children, isAssistant, extractTextFromElement]);
+
+  // Determine if there are any renderable children (non-empty)
+  const hasRenderableChildren = React.useMemo(() => {
+    if (!children) return false;
+    if (typeof children === 'string') return children.trim().length > 0;
+    if (Array.isArray(children)) return children.some((ch) => React.isValidElement(ch));
+    return React.isValidElement(children);
+  }, [children]);
 
   // Debug logging to see what content we're extracting
   React.useEffect(() => {
@@ -77,91 +106,83 @@ export function MessageBubble({
     }
   }, [isAssistant, children, content]);
 
-  // Helper function to recursively extract text from React elements
-  const extractTextFromElement = (element: React.ReactElement): string => {
-    if (typeof (element.props as any)?.children === 'string') {
-      return (element.props as any).children;
-    }
-    if (Array.isArray((element.props as any)?.children)) {
-      return (element.props as any).children
-        .map((child: any) => {
-          if (typeof child === 'string') return child;
-          if (React.isValidElement(child)) return extractTextFromElement(child);
-          return '';
-        })
-        .join('');
-    }
-    return '';
-  };
+  // Avoid rendering an empty assistant bubble before any text arrives (after hooks to preserve order)
+  const shouldHideAssistantBubble = isAssistant && !content && !hasRenderableChildren;
+  if (shouldHideAssistantBubble) {
+    return null;
+  }
 
   return (
     <div
       className={cn(
-        "flex w-full",
+        "flex w-full mb-4",
         isUser ? "justify-end" : "justify-start",
         className
       )}
     >
       <div
         className={cn(
-          "max-w-[85%] rounded-2xl px-4 py-3 text-sm shadow",
+          "max-w-[85%] rounded-2xl px-4 py-3 text-sm transition-all duration-200",
+          "backdrop-blur-sm transform hover:scale-[1.01]",
           isUser
-            ? "bg-emerald-600 text-white"
-            : "bg-muted text-foreground"
+            ? "bg-gradient-to-br from-emerald-500 to-emerald-600 text-white shadow-lg hover:shadow-xl hover:from-emerald-600 hover:to-emerald-700"
+            : "bg-gradient-to-br from-white to-gray-50/80 text-gray-800 shadow-md hover:shadow-lg border border-gray-200/50 hover:border-gray-300/50"
         )}
       >
         {isAssistant ? (
           content ? (
-            <div className="markdown-content prose prose-sm max-w-none dark:prose-invert">
+            <div className="markdown-content prose prose-sm max-w-none text-gray-800">
               <ReactMarkdown 
                 remarkPlugins={[remarkGfm]}
                 components={{
                 // Customize rendering for better chat bubble display
-                p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
-                ul: ({ children }) => <ul className="mb-2 ml-4 last:mb-0 list-disc">{children}</ul>,
-                ol: ({ children }) => <ol className="mb-2 ml-4 last:mb-0 list-decimal">{children}</ol>,
-                li: ({ children }) => <li className="mb-1">{children}</li>,
-                h1: ({ children }) => <h1 className="text-lg font-bold mb-2 mt-2">{children}</h1>,
-                h2: ({ children }) => <h2 className="text-base font-bold mb-2 mt-2">{children}</h2>,
-                h3: ({ children }) => <h3 className="text-sm font-bold mb-2 mt-1">{children}</h3>,
-                strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-                em: ({ children }) => <em className="italic">{children}</em>,
+                p: ({ children }) => <p className="mb-3 last:mb-0 leading-relaxed text-gray-700">{children}</p>,
+                ul: ({ children }) => <ul className="mb-3 ml-4 last:mb-0 list-disc text-gray-700">{children}</ul>,
+                ol: ({ children }) => <ol className="mb-3 ml-4 last:mb-0 list-decimal text-gray-700">{children}</ol>,
+                li: ({ children }) => <li className="mb-1 leading-relaxed">{children}</li>,
+                h1: ({ children }) => <h1 className="text-lg font-bold mb-3 mt-2 text-gray-900 border-b border-gray-200 pb-1">{children}</h1>,
+                h2: ({ children }) => <h2 className="text-base font-bold mb-2 mt-3 text-gray-900">{children}</h2>,
+                h3: ({ children }) => <h3 className="text-sm font-bold mb-2 mt-2 text-gray-800">{children}</h3>,
+                strong: ({ children }) => <strong className="font-semibold text-gray-900">{children}</strong>,
+                em: ({ children }) => <em className="italic text-gray-600">{children}</em>,
                 code: ({ className, children, ...props }) => {
                   const match = /language-(\w+)/.exec(className || '');
                   return match ? (
-                    <pre className="bg-gray-800 text-gray-100 rounded p-3 my-2 overflow-x-auto text-xs">
+                    <pre className="bg-gradient-to-r from-gray-900 to-gray-800 text-gray-100 rounded-lg p-4 my-3 overflow-x-auto text-xs shadow-inner border border-gray-700">
                       <code className={className} {...props}>
                         {children}
                       </code>
                     </pre>
                   ) : (
-                    <code className="bg-gray-100 dark:bg-gray-700 rounded px-1.5 py-0.5 text-xs font-mono" {...props}>
+                    <code className="bg-emerald-50 text-emerald-700 rounded-md px-2 py-1 text-xs font-mono border border-emerald-200" {...props}>
                       {children}
                     </code>
                   );
                 },
                 blockquote: ({ children }) => (
-                  <blockquote className="border-l-4 border-gray-300 dark:border-gray-600 pl-4 italic my-2 text-gray-700 dark:text-gray-300">
+                  <blockquote className="border-l-4 border-emerald-300 bg-emerald-50/50 pl-4 py-2 italic my-3 text-gray-700 rounded-r-lg">
                     {children}
                   </blockquote>
                 ),
                 a: ({ children, href }) => (
-                  <a href={href} className="text-blue-600 dark:text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">
+                  <a href={href} className="text-emerald-600 hover:text-emerald-700 hover:underline font-medium transition-colors duration-200" target="_blank" rel="noopener noreferrer">
                     {children}
                   </a>
                 ),
                 table: ({ children }) => (
-                  <table className="border-collapse border border-gray-300 dark:border-gray-600 my-2 text-xs w-full">
-                    {children}
-                  </table>
+                  <div className="my-3 overflow-x-auto rounded-lg border border-gray-200 shadow-sm">
+                    <table className="w-full text-xs">
+                      {children}
+                    </table>
+                  </div>
                 ),
                 th: ({ children }) => (
-                  <th className="border border-gray-300 dark:border-gray-600 px-2 py-1 bg-gray-100 dark:bg-gray-700 font-semibold">
+                  <th className="border-b border-gray-200 px-3 py-2 bg-gradient-to-r from-gray-50 to-gray-100 font-semibold text-gray-700 text-left">
                     {children}
                   </th>
                 ),
                 td: ({ children }) => (
-                  <td className="border border-gray-300 dark:border-gray-600 px-2 py-1">
+                  <td className="border-b border-gray-100 px-3 py-2 text-gray-600">
                     {children}
                   </td>
                 ),
@@ -171,10 +192,7 @@ export function MessageBubble({
               </ReactMarkdown>
             </div>
           ) : (
-            <div>
-              <div style={{color: 'red', fontSize: '10px'}}>DEBUG: No content extracted</div>
-              {children}
-            </div>
+            <div>{children}</div>
           )
         ) : (
           children
@@ -200,20 +218,29 @@ export function AttachmentChips({
         return (
           <div
             key={f.id}
-            className="flex items-center gap-2 rounded-lg border bg-background px-2 py-1 text-xs"
+            className={cn(
+              "flex items-center gap-2 rounded-lg px-3 py-2 text-xs transition-all duration-200",
+              "bg-gradient-to-r from-emerald-50 to-emerald-100/50 border border-emerald-200/50",
+              "hover:from-emerald-100 hover:to-emerald-100 hover:border-emerald-300/50 hover:shadow-sm",
+              "backdrop-blur-sm"
+            )}
           >
             {isImg ? (
-              <ImageIcon className="h-4 w-4 text-emerald-600" />
+              <ImageIcon className="h-4 w-4 text-emerald-600 flex-shrink-0" />
             ) : isText ? (
-              <FileText className="h-4 w-4 text-emerald-600" />
+              <FileText className="h-4 w-4 text-emerald-600 flex-shrink-0" />
             ) : (
-              <File className="h-4 w-4 text-emerald-600" />
+              <File className="h-4 w-4 text-emerald-600 flex-shrink-0" />
             )}
-            <span className="truncate max-w-[160px]">{f.name}</span>
-            <span className="text-muted-foreground">{Math.ceil(f.size / 1024)} KB</span>
+            <span className="truncate max-w-[140px] text-gray-700 font-medium">{f.name}</span>
+            <span className="text-emerald-600/70 font-mono">{Math.ceil(f.size / 1024)} KB</span>
             {onRemove ? (
               <button
-                className="text-muted-foreground hover:text-foreground"
+                className={cn(
+                  "text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full p-1",
+                  "transition-all duration-200 flex-shrink-0 ml-1",
+                  "hover:scale-110 active:scale-95"
+                )}
                 onClick={() => onRemove(f.id)}
                 aria-label={`remove ${f.name}`}
                 title={`remove ${f.name}`}
