@@ -144,12 +144,22 @@ export function WalletConnectButton(props: WalletConnectButtonProps) {
     return (
       <Button
         variant="outline"
-        className={cn("gap-2", className)}
+        className={cn(
+          "gap-2.5 bg-gradient-to-r from-emerald-25 to-emerald-50/80 border-emerald-150/50 text-emerald-700 hover:from-emerald-50 hover:to-emerald-100/70 hover:border-emerald-200/60 hover:text-emerald-800 transition-all duration-200 hover:shadow-md hover:scale-[1.02] active:scale-[0.98]",
+          className
+        )}
         onClick={doConnect}
         disabled={loading}
       >
-        <Wallet className="h-4 w-4" />
-        {loading ? "Connecting..." : label}
+        <Wallet className={cn(
+          "h-4 w-4 transition-all duration-200",
+          loading ? "animate-pulse text-emerald-600" : "text-emerald-700"
+        )} />
+        {loading ? (
+          <span className="animate-pulse">Connecting...</span>
+        ) : (
+          label
+        )}
       </Button>
     );
   }
@@ -160,21 +170,37 @@ export function WalletConnectButton(props: WalletConnectButtonProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="secondary" className={cn("gap-2", className)}>
-          <Wallet className="h-4 w-4" />
+        <Button 
+          variant="secondary" 
+          className={cn(
+            "gap-2.5 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white hover:from-emerald-600 hover:to-emerald-700 border-0 shadow-md hover:shadow-lg transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]",
+            className
+          )}
+        >
+          <div className="relative">
+            <Wallet className="h-4 w-4" />
+            <div className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-green-400 rounded-full animate-pulse border border-white" />
+          </div>
           {showAddressText && (
             <>
-              <span className="hidden sm:inline">{shortAddress(address)}</span>
-              <span className="sm:hidden">{shortAddress(address)}</span>
+              <span className="hidden sm:inline font-mono text-sm">{shortAddress(address)}</span>
+              <span className="sm:hidden font-mono text-sm">{shortAddress(address)}</span>
             </>
           )}
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <div className="px-3 py-2 text-sm text-muted-foreground">
-          Connected via {provider === "porto" ? "Porto (Blocto)" : provider === "injected" ? "Injected" : "Mock"}
+      <DropdownMenuContent align="end" className="rounded-xl shadow-xl border-gray-200 min-w-[200px]">
+        <div className="px-4 py-3 text-sm text-gray-600 border-b border-gray-100">
+          <div className="font-medium text-gray-900 mb-1">Connected Wallet</div>
+          <div className="font-mono text-xs bg-gray-50 px-2 py-1 rounded-md">{address}</div>
+          <div className="text-xs mt-2 text-gray-500">
+            via {provider === "porto" ? "Porto (Blocto)" : provider === "injected" ? "Injected Wallet" : "Mock Wallet"}
+          </div>
         </div>
-        <DropdownMenuItem onClick={disconnect} className="text-red-600">
+        <DropdownMenuItem 
+          onClick={disconnect} 
+          className="text-red-600 hover:text-red-700 hover:bg-red-50 transition-colors rounded-lg m-1"
+        >
           <LogOut className="h-4 w-4 mr-2" />
           Disconnect
         </DropdownMenuItem>

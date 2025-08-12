@@ -234,10 +234,36 @@ export function convertDifyMessagesToLocal(difyMessages: DifyMessage[]) {
   for (const difyMessage of difyMessages) {
     // Add user message
     if (difyMessage.query) {
+      // Build client-side attachments from Dify message_files that belong to the user
+      const userFiles = Array.isArray(difyMessage.message_files)
+        ? difyMessage.message_files.filter((f) => f.belongs_to === 'user')
+        : [];
+      const clientAttachments = userFiles.map((f) => {
+        const fileNameFromUrl = (() => {
+          try {
+            const u = new URL(f.url);
+            const last = u.pathname.split('/').filter(Boolean).pop();
+            return last || f.id;
+          } catch {
+            // Fallback: attempt simple split if not a valid URL
+            const parts = (f.url || '').split('/');
+            return parts[parts.length - 1] || f.id;
+          }
+        })();
+        const isImage = (f.type || '').toLowerCase() === 'image' || /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(f.url);
+        return {
+          id: f.id,
+          name: fileNameFromUrl,
+          url: f.url,
+          previewUrl: isImage ? f.url : undefined,
+        } as any;
+      });
+
       messages.push({
         id: `user_${difyMessage.id}`,
         role: 'user' as const,
-        parts: [{ type: 'text' as const, text: difyMessage.query }]
+        parts: [{ type: 'text' as const, text: difyMessage.query }],
+        ...(clientAttachments.length > 0 ? { data: { clientAttachments } } : {})
       });
     }
     

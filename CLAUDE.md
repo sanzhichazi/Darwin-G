@@ -113,3 +113,4 @@ When working on this codebase:
   - Delete conversation → refresh page → conversation should be gone
   - Create new conversation → should appear in sidebar immediately
   - Wallet disconnect/reconnect → should preserve correct user's conversations
+- Make sure all the code are modularization for future modification and esay debugging

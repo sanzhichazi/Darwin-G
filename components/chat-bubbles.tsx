@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { ImageIcon, FileText, File } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { ToolExecutionDisplay, type ToolExecution } from './tool-execution';
 
 export type AttachmentPreview = {
   id: string;
@@ -23,28 +24,60 @@ export function MessageBubble({
   role,
   children,
   className,
+  tools = [],
 }: {
   role: "user" | "assistant" | "system";
   children: React.ReactNode;
   className?: string;
+  tools?: ToolExecution[];
 }) {
   const isUser = role === "user";
   const isAssistant = role === "assistant";
   
   // Helper function to recursively extract text from React elements
-  const extractTextFromElement = React.useCallback((element: React.ReactElement): string => {
-    if (typeof (element.props as any)?.children === 'string') {
-      return (element.props as any).children;
+  const extractTextFromElement = React.useCallback((element: any): string => {
+    // Handle direct string
+    if (typeof element === 'string') {
+      return element;
     }
-    if (Array.isArray((element.props as any)?.children)) {
-      return (element.props as any).children
-        .map((child: any) => {
-          if (typeof child === 'string') return child;
-          if (React.isValidElement(child)) return extractTextFromElement(child);
-          return '';
-        })
+    
+    // Handle React elements
+    if (React.isValidElement(element)) {
+      const props = element.props as any;
+      
+      // Handle React.Fragment specifically - extract its children
+      if (element.type === React.Fragment) {
+        if (typeof props?.children === 'string') {
+          return props.children;
+        }
+        if (props?.children) {
+          return extractTextFromElement(props.children);
+        }
+      }
+      
+      // Handle other React elements
+      if (typeof props?.children === 'string') {
+        return props.children;
+      }
+      if (Array.isArray(props?.children)) {
+        return props.children
+          .map((child: any) => extractTextFromElement(child))
+          .filter(text => typeof text === 'string' && text.trim().length > 0)
+          .join('');
+      }
+      if (props?.children) {
+        return extractTextFromElement(props.children);
+      }
+    }
+    
+    // Handle arrays
+    if (Array.isArray(element)) {
+      return element
+        .map(child => extractTextFromElement(child))
+        .filter(text => typeof text === 'string' && text.trim().length > 0)
         .join('');
     }
+    
     return '';
   }, []);
   
@@ -57,24 +90,20 @@ export function MessageBubble({
       return children;
     }
     
-    // Handle React element with string content
-    if (React.isValidElement(children) && typeof (children.props as any)?.children === 'string') {
-      return (children.props as any).children;
-    }
-    
     // Handle array of React elements (from m.parts.map)
     if (Array.isArray(children)) {
       const textContent = children
-        .filter(child => React.isValidElement(child))
-        .map(child => {
-          if (typeof (child.props as any)?.children === 'string') {
-            return (child.props as any).children;
-          }
-          return '';
-        })
+        .filter(child => typeof child !== 'boolean' && child != null) // Filter out booleans and null/undefined
+        .map(child => extractTextFromElement(child))
+        .filter(text => typeof text === 'string' && text.trim().length > 0)
         .join('\n\n'); // Join multiple parts with double newlines
       
       return textContent || null;
+    }
+    
+    // Handle React element with string content
+    if (React.isValidElement(children) && typeof (children.props as any)?.children === 'string') {
+      return (children.props as any).children;
     }
     
     // Handle single React element from message parts
@@ -94,23 +123,18 @@ export function MessageBubble({
     return React.isValidElement(children);
   }, [children]);
 
-  // Debug logging to see what content we're extracting
-  React.useEffect(() => {
-    if (isAssistant) {
-      console.log('MessageBubble Debug:');
-      console.log('- isAssistant:', isAssistant);
-      console.log('- children:', children);
-      console.log('- children type:', typeof children);
-      console.log('- extracted content:', content);
-      console.log('- content length:', content?.length);
-    }
-  }, [isAssistant, children, content]);
+  // Debug logging disabled in production
+  // React.useEffect(() => {
+  //   if (isAssistant) {
+  //     console.log('MessageBubble render info:', { hasContent: !!content, contentLength: content?.length || 0 });
+  //   }
+  // }, [isAssistant, children, content]);
 
-  // Avoid rendering an empty assistant bubble before any text arrives (after hooks to preserve order)
-  const shouldHideAssistantBubble = isAssistant && !content && !hasRenderableChildren;
-  if (shouldHideAssistantBubble) {
-    return null;
-  }
+  // Don't hide assistant bubbles - let them render even if empty for debugging
+  // const shouldHideAssistantBubble = isAssistant && !content && !hasRenderableChildren;
+  // if (shouldHideAssistantBubble) {
+  //   return null;
+  // }
 
   return (
     <div
@@ -130,70 +154,79 @@ export function MessageBubble({
         )}
       >
         {isAssistant ? (
-          content ? (
+          <div className="space-y-3">
+            {/* Tool Execution Display */}
+            {tools.length > 0 && (
+              <ToolExecutionDisplay tools={tools} />
+            )}
+            
+            {/* Message Content */}
             <div className="markdown-content prose prose-sm max-w-none text-gray-800">
-              <ReactMarkdown 
-                remarkPlugins={[remarkGfm]}
-                components={{
-                // Customize rendering for better chat bubble display
-                p: ({ children }) => <p className="mb-3 last:mb-0 leading-relaxed text-gray-700">{children}</p>,
-                ul: ({ children }) => <ul className="mb-3 ml-4 last:mb-0 list-disc text-gray-700">{children}</ul>,
-                ol: ({ children }) => <ol className="mb-3 ml-4 last:mb-0 list-decimal text-gray-700">{children}</ol>,
-                li: ({ children }) => <li className="mb-1 leading-relaxed">{children}</li>,
-                h1: ({ children }) => <h1 className="text-lg font-bold mb-3 mt-2 text-gray-900 border-b border-gray-200 pb-1">{children}</h1>,
-                h2: ({ children }) => <h2 className="text-base font-bold mb-2 mt-3 text-gray-900">{children}</h2>,
-                h3: ({ children }) => <h3 className="text-sm font-bold mb-2 mt-2 text-gray-800">{children}</h3>,
-                strong: ({ children }) => <strong className="font-semibold text-gray-900">{children}</strong>,
-                em: ({ children }) => <em className="italic text-gray-600">{children}</em>,
-                code: ({ className, children, ...props }) => {
-                  const match = /language-(\w+)/.exec(className || '');
-                  return match ? (
-                    <pre className="bg-gradient-to-r from-gray-900 to-gray-800 text-gray-100 rounded-lg p-4 my-3 overflow-x-auto text-xs shadow-inner border border-gray-700">
-                      <code className={className} {...props}>
+              {content ? (
+                <ReactMarkdown 
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                  // Customize rendering for better chat bubble display
+                  p: ({ children }) => <p className="mb-3 last:mb-0 leading-relaxed text-gray-700">{children}</p>,
+                  ul: ({ children }) => <ul className="mb-3 ml-4 last:mb-0 list-disc text-gray-700">{children}</ul>,
+                  ol: ({ children }) => <ol className="mb-3 ml-4 last:mb-0 list-decimal text-gray-700">{children}</ol>,
+                  li: ({ children }) => <li className="mb-1 leading-relaxed">{children}</li>,
+                  h1: ({ children }) => <h1 className="text-lg font-bold mb-3 mt-2 text-gray-900 border-b border-gray-200 pb-1">{children}</h1>,
+                  h2: ({ children }) => <h2 className="text-base font-bold mb-2 mt-3 text-gray-900">{children}</h2>,
+                  h3: ({ children }) => <h3 className="text-sm font-bold mb-2 mt-2 text-gray-800">{children}</h3>,
+                  strong: ({ children }) => <strong className="font-semibold text-gray-900">{children}</strong>,
+                  em: ({ children }) => <em className="italic text-gray-600">{children}</em>,
+                  code: ({ className, children, ...props }) => {
+                    const match = /language-(\w+)/.exec(className || '');
+                    return match ? (
+                      <pre className="bg-gradient-to-r from-gray-900 to-gray-800 text-gray-100 rounded-lg p-4 my-3 overflow-x-auto text-xs shadow-inner border border-gray-700">
+                        <code className={className} {...props}>
+                          {children}
+                        </code>
+                      </pre>
+                    ) : (
+                      <code className="bg-emerald-50 text-emerald-700 rounded-md px-2 py-1 text-xs font-mono border border-emerald-200" {...props}>
                         {children}
                       </code>
-                    </pre>
-                  ) : (
-                    <code className="bg-emerald-50 text-emerald-700 rounded-md px-2 py-1 text-xs font-mono border border-emerald-200" {...props}>
+                    );
+                  },
+                  blockquote: ({ children }) => (
+                    <blockquote className="border-l-4 border-emerald-300 bg-emerald-50/50 pl-4 py-2 italic my-3 text-gray-700 rounded-r-lg">
                       {children}
-                    </code>
-                  );
-                },
-                blockquote: ({ children }) => (
-                  <blockquote className="border-l-4 border-emerald-300 bg-emerald-50/50 pl-4 py-2 italic my-3 text-gray-700 rounded-r-lg">
-                    {children}
-                  </blockquote>
-                ),
-                a: ({ children, href }) => (
-                  <a href={href} className="text-emerald-600 hover:text-emerald-700 hover:underline font-medium transition-colors duration-200" target="_blank" rel="noopener noreferrer">
-                    {children}
-                  </a>
-                ),
-                table: ({ children }) => (
-                  <div className="my-3 overflow-x-auto rounded-lg border border-gray-200 shadow-sm">
-                    <table className="w-full text-xs">
+                    </blockquote>
+                  ),
+                  a: ({ children, href }) => (
+                    <a href={href} className="text-emerald-600 hover:text-emerald-700 hover:underline font-medium transition-colors duration-200" target="_blank" rel="noopener noreferrer">
                       {children}
-                    </table>
-                  </div>
-                ),
-                th: ({ children }) => (
-                  <th className="border-b border-gray-200 px-3 py-2 bg-gradient-to-r from-gray-50 to-gray-100 font-semibold text-gray-700 text-left">
-                    {children}
-                  </th>
-                ),
-                td: ({ children }) => (
-                  <td className="border-b border-gray-100 px-3 py-2 text-gray-600">
-                    {children}
-                  </td>
-                ),
-              }}
-                          >
-                {content}
-              </ReactMarkdown>
+                    </a>
+                  ),
+                  table: ({ children }) => (
+                    <div className="my-3 overflow-x-auto rounded-lg border border-gray-200 shadow-sm">
+                      <table className="w-full text-xs">
+                        {children}
+                      </table>
+                    </div>
+                  ),
+                  th: ({ children }) => (
+                    <th className="border-b border-gray-200 px-3 py-2 bg-gradient-to-r from-gray-50 to-gray-100 font-semibold text-gray-700 text-left">
+                      {children}
+                    </th>
+                  ),
+                  td: ({ children }) => (
+                    <td className="border-b border-gray-100 px-3 py-2 text-gray-600">
+                      {children}
+                    </td>
+                  ),
+                }}
+                            >
+                  {content}
+                </ReactMarkdown>
+              ) : (
+                // Fallback: render children directly when content extraction fails
+                <div className="text-gray-700">{children}</div>
+              )}
             </div>
-          ) : (
-            <div>{children}</div>
-          )
+          </div>
         ) : (
           children
         )}
@@ -251,6 +284,89 @@ export function AttachmentChips({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+export type BubbleAttachment = {
+  id: string;
+  name: string;
+  size?: number;
+  type?: string; // mime or kind
+  url?: string; // original URL (for non-images)
+  previewUrl?: string; // image preview URL
+};
+
+export function BubbleAttachmentPreview({
+  attachments,
+  isUser,
+}: {
+  attachments: BubbleAttachment[] | undefined;
+  isUser?: boolean;
+}) {
+  if (!attachments || attachments.length === 0) return null;
+
+  const images = attachments.filter((a) => !!a.previewUrl);
+  const others = attachments.filter((a) => !a.previewUrl);
+
+  return (
+    <div className={cn("mt-3 space-y-3")}>      
+      {images.length > 0 && (
+        <div
+          className={cn(
+            "grid gap-2",
+            images.length === 1 ? "grid-cols-1" : images.length === 2 ? "grid-cols-2" : "grid-cols-3"
+          )}
+        >
+          {images.map((img) => (
+            <a
+              key={img.id}
+              href={img.url || img.previewUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={cn(
+                "block overflow-hidden rounded-xl",
+                isUser
+                  ? "ring-1 ring-white/20 hover:ring-white/30"
+                  : "ring-1 ring-gray-200 hover:ring-gray-300"
+              )}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={img.previewUrl}
+                alt={img.name}
+                className="w-full h-40 object-cover"
+                loading="lazy"
+              />
+            </a>
+          ))}
+        </div>
+      )}
+
+      {others.length > 0 && (
+        <div className="flex flex-col gap-2">
+          {others.map((f) => (
+            <a
+              key={f.id}
+              href={f.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={cn(
+                "flex items-center gap-2 rounded-lg px-3 py-2 text-xs transition-colors",
+                isUser
+                  ? "bg-white/10 text-white hover:bg-white/15"
+                  : "bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200"
+              )}
+            >
+              <File className={cn("h-4 w-4", isUser ? "text-white/90" : "text-emerald-600")} />
+              <span className="truncate max-w-[220px] font-medium">{f.name}</span>
+              {typeof f.size === 'number' && f.size > 0 && (
+                <span className={cn("ml-auto", isUser ? "text-white/70" : "text-emerald-700/70")}>{Math.ceil(f.size / 1024)} KB</span>
+              )}
+            </a>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -200,9 +200,8 @@ export async function POST(req: Request) {
             let capturedTaskId: string | undefined;
 
             try {
-              // Send initial start sequence
-              controller.enqueue(new TextEncoder().encode(`data: {"type":"start"}\n\n`));
-              controller.enqueue(new TextEncoder().encode(`data: {"type":"start-step"}\n\n`));
+              // Wait for actual content before starting message stream
+              // This prevents empty assistant bubbles from appearing
 
               while (true) {
                 let readResult;
@@ -238,8 +237,47 @@ export async function POST(req: Request) {
                     
                     try {
                       const parsed = JSON.parse(data);
-                      // Only log non-message events to reduce verbosity
-                      if (parsed.event !== 'message') {
+                      // Enhanced logging and streaming for agent_log events
+                      if (parsed.event === 'agent_log') {
+                        const logData = parsed.data;
+                        console.log("🔧 AGENT_LOG:", {
+                          label: logData.label,
+                          status: logData.status,
+                          tool_name: logData.data?.tool_name,
+                          provider: logData.metadata?.provider,
+                          parent_id: logData.parent_id,
+                          elapsed_time: logData.metadata?.elapsed_time
+                        });
+                        
+                        // Stream tool execution events to client using AI SDK compatible format
+                        if (logData.label && (logData.label.startsWith('CALL ') || logData.label.startsWith('ROUND ') || logData.label.includes('Thought'))) {
+                          const toolData = {
+                            id: logData.id,
+                            name: logData.data?.tool_name || '',
+                            label: logData.label,
+                            status: logData.status,
+                            startTime: logData.metadata?.started_at || Date.now(),
+                            endTime: logData.metadata?.finished_at,
+                            elapsedTime: logData.metadata?.elapsed_time,
+                            provider: logData.metadata?.provider,
+                            icon: logData.metadata?.icon,
+                            parentId: logData.parent_id,
+                            error: logData.error,
+                            round: logData.label.startsWith('ROUND ') ? logData.label : undefined
+                          };
+                          
+                          // Use AI SDK compatible data-* format
+                          const toolEvent = {
+                            type: "data-tool-execution",
+                            data: { toolExecution: toolData }
+                          };
+                          
+                          // Send tool event to client
+                          const toolEventJson = JSON.stringify(toolEvent);
+                          controller.enqueue(new TextEncoder().encode(`data: ${toolEventJson}\n\n`));
+                          console.log("🚀 Sent tool event:", toolData.label, toolData.status);
+                        }
+                      } else if (parsed.event !== 'message') {
                         console.log("Dify stream event:", parsed.event, parsed);
                       }
                       
@@ -253,15 +291,24 @@ export async function POST(req: Request) {
                         capturedTaskId = parsed.task_id;
                         console.log("Captured task ID from Dify:", capturedTaskId);
                         
-                        // Use AI SDK-compatible data-* event with data payload
-                        controller.enqueue(new TextEncoder().encode(`data: {"type":"data-task-id","data":{"taskId":"${capturedTaskId}"}}\n\n`));
+                        // Store task ID but don't send it as a stream event yet
+                        // We'll send it together with the actual content to avoid creating empty messages
                       }
                       
                       // Handle different Dify stream events
                       if (parsed.event === 'message' && parsed.answer) {
                         if (!hasStarted) {
-                          console.log("Dify streaming started, task_id:", capturedTaskId);
+                          console.log("🟢 Dify MESSAGE streaming started, task_id:", capturedTaskId);
+                          // Send start sequence now that we have content
+                          controller.enqueue(new TextEncoder().encode(`data: {"type":"start"}\n\n`));
+                          controller.enqueue(new TextEncoder().encode(`data: {"type":"start-step"}\n\n`));
                           controller.enqueue(new TextEncoder().encode(`data: {"type":"text-start","id":"${messageId}"}\n\n`));
+                          
+                          // Now send task ID with the content to enable stop functionality
+                          if (capturedTaskId) {
+                            controller.enqueue(new TextEncoder().encode(`data: {"type":"data-task-id","data":{"taskId":"${capturedTaskId}"}}\n\n`));
+                          }
+                          
                           hasStarted = true;
                         }
                         
@@ -276,8 +323,18 @@ export async function POST(req: Request) {
                         const output = parsed.data.data.output;
                         if (typeof output === 'string' && output.trim()) {
                           if (!hasStarted) {
-                            console.log("Dify agent streaming started, task_id:", capturedTaskId);
+                            console.log("🟢 Dify AGENT_LOG streaming started, task_id:", capturedTaskId);
+                            console.log("🟢 Agent output content:", output.substring(0, 100) + (output.length > 100 ? '...' : ''));
+                            // Send start sequence now that we have content
+                            controller.enqueue(new TextEncoder().encode(`data: {"type":"start"}\n\n`));
+                            controller.enqueue(new TextEncoder().encode(`data: {"type":"start-step"}\n\n`));
                             controller.enqueue(new TextEncoder().encode(`data: {"type":"text-start","id":"${messageId}"}\n\n`));
+                            
+                            // Now send task ID with the content to enable stop functionality
+                            if (capturedTaskId) {
+                              controller.enqueue(new TextEncoder().encode(`data: {"type":"data-task-id","data":{"taskId":"${capturedTaskId}"}}\n\n`));
+                            }
+                            
                             hasStarted = true;
                           }
                           
@@ -386,6 +443,9 @@ export async function POST(req: Request) {
               } else {
                 // No content was received at all, show error message
                 console.log('No content received from Dify, sending error message');
+                // Send start sequence for error message
+                controller.enqueue(new TextEncoder().encode(`data: {"type":"start"}\n\n`));
+                controller.enqueue(new TextEncoder().encode(`data: {"type":"start-step"}\n\n`));
                 controller.enqueue(new TextEncoder().encode(`data: {"type":"text-start","id":"${messageId}"}\n\n`));
                 const errorText = `\n❌ Error: The AI service didn't provide a response. Please try again.`;
                 const escapedError = JSON.stringify(errorText);

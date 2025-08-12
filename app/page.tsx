@@ -12,7 +12,10 @@ import {
   MessageBubble,
   AttachmentChips,
   type AttachmentPreview,
+    BubbleAttachmentPreview,
+    type BubbleAttachment,
 } from "@/components/chat-bubbles";
+import { type ToolExecution } from "@/components/tool-execution";
 import { cn } from "@/lib/utils";
 import { STORAGE_KEY } from "@/components/wallet-connect";
 import { 
@@ -50,6 +53,33 @@ export default function Page() {
       setIsGenerating(false);
       setCurrentTaskId(null);
       setSending(false);
+      
+      // Move current tool executions to the actual message ID and save to localStorage
+      if (message && message.id) {
+        console.log('✅ onFinish called with message ID:', message.id);
+        setToolExecutions(prev => {
+          const currentTools = prev.get('current');
+          console.log('🔧 Current tools found:', currentTools ? currentTools.length : 0);
+          if (currentTools && currentTools.length > 0) {
+            const newMap = new Map(prev);
+            newMap.set(message.id, currentTools);
+            newMap.delete('current');
+            
+            // Save to localStorage now that we have the actual message ID
+            console.log('💾 Saving tools for message:', message.id);
+            saveToolExecutionsToStorage(message.id, currentTools);
+            
+            console.log('🔧 Moved tools from current to message ID:', message.id);
+            return newMap;
+          } else {
+            console.log('⚠️ No current tools to move');
+          }
+          return prev;
+        });
+      } else {
+        console.log('⚠️ onFinish called but no message or message.id');
+      }
+      
       // Refresh sidebar conversations once after a completed reply
       setConversationRefreshTrigger(prev => prev + 1);
       
@@ -67,6 +97,24 @@ export default function Page() {
       setCurrentTaskId(null);
       setSending(false);
       setConnectionError('An error occurred while processing your message. Please try again.');
+      
+      // Update any running tool executions to error state
+      setToolExecutions(prev => {
+        const currentTools = prev.get('current') || [];
+        if (currentTools.length > 0) {
+          console.log('🔧 Marking running tools as failed due to error');
+          const updatedTools = currentTools.map(tool => {
+            if (tool.status === 'start') {
+              return { ...tool, status: 'error' as const, label: `${tool.label} (Failed)` };
+            }
+            return tool;
+          });
+          const newMap = new Map(prev);
+          newMap.set('current', updatedTools);
+          return newMap;
+        }
+        return prev;
+      });
       
       // Clear sending timeout
       if (sendingTimeoutRef.current) {
@@ -108,19 +156,109 @@ export default function Page() {
   const [isLoadingHistory, setIsLoadingHistory] = React.useState(false);
   const [conversationRefreshTrigger, setConversationRefreshTrigger] = React.useState(0); // Trigger to refresh sidebar
   const [isHydrated, setIsHydrated] = React.useState(false); // Track hydration status
+  const [toolExecutions, setToolExecutions] = React.useState<Map<string, ToolExecution[]>>(new Map()); // Track tool executions per message
+  const [isInitialLoading, setIsInitialLoading] = React.useState(true); // Start true to prevent welcome screen flash
+  const [isNewConversation, setIsNewConversation] = React.useState(false); // Track when user explicitly wants new conversation
+
+  // Helper functions for tool executions persistence
+  const saveToolExecutionsToStorage = React.useCallback((messageId: string, tools: ToolExecution[]) => {
+    if (!walletAddress || !conversationId) return;
+    const key = `toolExecutions_${walletAddress}`;
+    try {
+      const existing = localStorage.getItem(key);
+      const allToolExecutions = existing ? JSON.parse(existing) : {};
+      
+      // Store by conversation ID and message position instead of message ID
+      // This way tools persist across message ID changes
+      const conversationKey = `${conversationId}_msg_${messages.length - 1}`; // Use message position
+      allToolExecutions[conversationKey] = { messageId, tools };
+      
+      localStorage.setItem(key, JSON.stringify(allToolExecutions));
+      console.log('💾 SAVED tool executions for conversation:', conversationKey, 'message:', messageId, 'tools count:', tools.length);
+      console.log('💾 Full localStorage key:', key);
+      console.log('💾 Tools saved:', tools.map(t => `${t.label}(${t.status})`));
+    } catch (error) {
+      console.error('Error saving tool executions:', error);
+    }
+  }, [walletAddress, conversationId, messages.length]);
+
+  const loadToolExecutionsFromStorage = React.useCallback(() => {
+    if (!walletAddress) return new Map();
+    const key = `toolExecutions_${walletAddress}`;
+    try {
+      const stored = localStorage.getItem(key);
+      console.log('🔍 LOADING tool executions from localStorage, key:', key);
+      console.log('🔍 Raw stored data:', stored);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        console.log('🔍 Parsed data:', parsed);
+        const map = new Map();
+        Object.entries(parsed).forEach(([messageId, tools]) => {
+          map.set(messageId, tools as ToolExecution[]);
+          console.log('🔍 Loaded tools for message:', messageId, 'count:', (tools as ToolExecution[]).length);
+        });
+        console.log('🔍 Final map size:', map.size);
+        return map;
+      } else {
+        console.log('🔍 No stored data found');
+      }
+    } catch (error) {
+      console.error('Error loading tool executions:', error);
+    }
+    return new Map();
+  }, [walletAddress]);
 
   const messagesRef = React.useRef<HTMLDivElement | null>(null);
   const conversationIdRef = React.useRef<string | undefined>(undefined); // Ref to ensure we have the latest conversationId
   const sendingTimeoutRef = React.useRef<NodeJS.Timeout | null>(null); // Track active timeout
 
+  // Single unified loader that covers all loading phases
+  const isUnifiedLoading = React.useMemo(() => {
+    return (!isHydrated || isInitialLoading || isLoadingHistory) && activeMainTab === 'chat';
+  }, [isHydrated, isInitialLoading, isLoadingHistory, activeMainTab]);
+
+  // Progressive loading messages that smoothly transition between phases
+  const unifiedLoader = React.useMemo(() => {
+    if (!isHydrated) {
+      return { title: 'Loading Darwin', subtitle: 'Initializing your workspace...' };
+    }
+    if (isInitialLoading || isLoadingHistory) {
+      return { title: 'Loading Darwin', subtitle: 'Retrieving your conversations...' };
+    }
+    return { title: 'Loading Darwin', subtitle: 'Almost ready...' };
+  }, [isHydrated, isInitialLoading, isLoadingHistory]);
+
   // Hydration and wallet connection status check
   React.useEffect(() => {
     if (typeof window !== 'undefined') {
       const savedWalletAddress = localStorage.getItem(STORAGE_KEY);
+      const savedConversationId = localStorage.getItem(CONVERSATION_ID_KEY);
+      console.log('🔄 HYDRATION - savedWallet:', savedWalletAddress, 'savedConversation:', savedConversationId);
+      
       setWalletAddress(savedWalletAddress);
       setIsHydrated(true); // Mark as hydrated after checking localStorage
+      
+      // If we have both wallet and conversation, set it up for auto-loading
+      if (savedWalletAddress && savedConversationId) {
+        console.log('🔄 IMMEDIATE LOAD - Both wallet and conversation found, setting up auto-load');
+        setCurrentConversationId(savedConversationId);
+        // Keep isInitialLoading true - it will be cleared by auto-load useEffect
+      } else {
+        console.log('🔄 NO CONVERSATION TO LOAD - Will show welcome screen');
+        // Keep isInitialLoading true - it will be cleared by auto-load useEffect
+      }
     }
   }, []);
+
+  // Load tool executions when wallet address changes
+  React.useEffect(() => {
+    if (walletAddress && isHydrated) {
+      console.log('🔄 Loading tool executions for wallet:', walletAddress);
+      const storedToolExecutions = loadToolExecutionsFromStorage();
+      console.log('🔄 Setting tool executions, size:', storedToolExecutions.size);
+      setToolExecutions(storedToolExecutions);
+    }
+  }, [walletAddress, isHydrated, loadToolExecutionsFromStorage]);
 
   // Listen for wallet connection changes  
   React.useEffect(() => {
@@ -152,11 +290,28 @@ export default function Page() {
 
   // Load conversation history when selecting a conversation
   const loadConversationHistory = React.useCallback(async (conversationId: string) => {
-    if (!walletAddress) return;
+    console.log('🔄 LOAD CONVERSATION START:', { conversationId, walletAddress });
+    if (!walletAddress) {
+      console.log('❌ LOAD CONVERSATION FAILED: No wallet address');
+      setIsLoadingHistory(false);
+      setIsInitialLoading(false);
+      return;
+    }
 
     setIsLoadingHistory(true);
+    console.log('🔄 LOAD CONVERSATION: Fetching messages from API...');
+    
+    // Set a timeout to prevent infinite loading
+    const loadTimeout = setTimeout(() => {
+      console.log('❌ LOAD CONVERSATION TIMEOUT: Taking too long, resetting states');
+      setIsLoadingHistory(false);
+      setIsInitialLoading(false);
+      setConnectionError('Loading conversation timed out. Please try again.');
+    }, 10000); // 10 second timeout
+    
     try {
       const response = await fetch(`/api/messages?conversation_id=${conversationId}&user=${walletAddress}`);
+      console.log('🔄 LOAD CONVERSATION: API response status:', response.status);
       if (response.ok) {
         const data: DifyHistoryResponse = await response.json();
         const convertedMessages = convertDifyMessagesToLocal(data.data); // Dify API returns in correct chronological order
@@ -165,43 +320,174 @@ export default function Page() {
         setConversationId(conversationId);
         conversationIdRef.current = conversationId;
         
-        // Load messages into the chat
+        // Load tool executions for this conversation's messages BEFORE setting messages
+        console.log('🔄 Loading tool executions for conversation messages...');
+        const storedToolExecutions = loadToolExecutionsFromStorage();
+        console.log('🔄 All stored tool executions size:', storedToolExecutions.size);
+        
+        const conversationToolExecutions = new Map();
+        
+        // Get all stored tool execution keys to match against
+        const storedKeys = Array.from(storedToolExecutions.keys());
+        console.log('🔍 Available stored tool keys:', storedKeys);
+        
+        // Get stored tool execution data for this wallet
+        const key = `toolExecutions_${walletAddress}`;
+        let allStoredData = {};
+        try {
+          const stored = localStorage.getItem(key);
+          if (stored) {
+            allStoredData = JSON.parse(stored);
+            console.log('🔍 Loaded stored data for tool lookup:', Object.keys(allStoredData));
+          }
+        } catch (error) {
+          console.error('Error loading stored data for tool lookup:', error);
+        }
+
+        convertedMessages.forEach((msg, index) => {
+          console.log('🔍 Checking message at index:', index, 'ID:', msg.id, 'role:', msg.role);
+          
+          // Try to find tools by conversation ID and message position
+          const conversationKey = `${conversationId}_msg_${index}`;
+          console.log('🔍 Looking for conversation key:', conversationKey);
+          
+          let tools = null;
+          
+          // Look through stored data for this conversation key
+          for (const [storageKey, storageData] of Object.entries(allStoredData)) {
+            if (storageKey === conversationKey) {
+              tools = (storageData as any).tools;
+              console.log('✅ Found tools by conversation position:', conversationKey, 'tools:', tools?.length || 0);
+              break;
+            }
+          }
+          
+          if (tools && tools.length > 0) {
+            console.log('✅ Loading tools for message:', msg.id, 'tools:', tools.length);
+            conversationToolExecutions.set(msg.id, tools);
+          } else {
+            console.log('❌ No tools found for message at position:', index);
+          }
+        });
+        
+        console.log('🔄 Setting conversation tool executions, size:', conversationToolExecutions.size);
+        
+        // Set tool executions FIRST, then messages to prevent collapse
+        setToolExecutions(conversationToolExecutions);
+        
+        // Now load messages into the chat
         if (setMessages) {
           setMessages(convertedMessages);
         }
         
-        console.log('Loaded conversation history:', convertedMessages);
+        console.log('✅ LOAD CONVERSATION SUCCESS:', convertedMessages.length, 'messages loaded');
+        console.log('✅ LOAD CONVERSATION: Loaded tool executions for', conversationToolExecutions.size, 'messages with tools');
+      } else {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        console.log('❌ LOAD CONVERSATION FAILED: API error', response.status, errorText);
+        
+        if (response.status === 404) {
+          // Conversation not found, clear the saved ID and show welcome
+          console.log('🔄 CONVERSATION NOT FOUND: Clearing saved conversation ID');
+          if (typeof window !== 'undefined') {
+            localStorage.removeItem(CONVERSATION_ID_KEY);
+          }
+          setConversationId(undefined);
+          setCurrentConversationId(undefined);
+          conversationIdRef.current = undefined;
+          // Don't show error, just show welcome screen
+        } else {
+          setConnectionError(`Failed to load conversation history: ${response.status}`);
+        }
       }
     } catch (error) {
-      console.error('Error loading conversation history:', error);
+      console.error('❌ LOAD CONVERSATION ERROR:', error);
       setConnectionError('Failed to load conversation history. Please try again.');
     } finally {
+      clearTimeout(loadTimeout); // Clear the timeout
+      console.log('🔄 LOAD CONVERSATION COMPLETE: Resetting loading states');
       setIsLoadingHistory(false);
+      setIsInitialLoading(false);
     }
   }, [walletAddress]); // Remove setMessages from dependencies to prevent instability
+
+  // Auto-load last conversation on page refresh - but not when user wants new conversation
+  React.useEffect(() => {
+    // Skip if user explicitly wants new conversation
+    if (isNewConversation) {
+      console.log('🔄 Auto-load skipped - user wants new conversation');
+      return;
+    }
+
+    // Only run once after hydration when wallet is available
+    if (!walletAddress || !isHydrated) {
+      console.log('🔄 Auto-load waiting for:', { walletAddress: !!walletAddress, isHydrated });
+      return;
+    }
+
+    // If we're already loading, wait
+    if (isLoadingHistory) {
+      console.log('🔄 Auto-load skipped - already loading');
+      return;
+    }
+
+    // If we already have messages, ensure initial loading is cleared and stop
+    if (messages.length > 0) {
+      if (isInitialLoading) {
+        console.log('🔄 Messages present - clearing initial loading');
+        setIsInitialLoading(false);
+      }
+      return;
+    }
+
+    // Prefer currentConversationId, then saved ID from localStorage
+    const savedConversationId = typeof window !== 'undefined' ? localStorage.getItem(CONVERSATION_ID_KEY) : null;
+    const idToLoad = currentConversationId || savedConversationId || undefined;
+    console.log('🔄 Page refresh - idToLoad:', idToLoad, 'currentConversationId:', currentConversationId, 'saved:', savedConversationId);
+
+    if (idToLoad) {
+      if (!currentConversationId) setCurrentConversationId(idToLoad);
+      console.log('🔄 Auto-loading conversation:', idToLoad);
+      loadConversationHistory(idToLoad);
+    } else {
+      console.log('🔄 No conversation to auto-load - showing welcome');
+      setIsInitialLoading(false);
+    }
+  }, [walletAddress, isHydrated, messages.length, isLoadingHistory, currentConversationId, isNewConversation, isInitialLoading]);
 
   // Handle conversation selection
   const handleSelectConversation = React.useCallback((conversationId: string | undefined) => {
     setCurrentConversationId(conversationId);
+    setIsNewConversation(false); // Reset new conversation flag when selecting existing conversation
+    
     if (conversationId) {
       loadConversationHistory(conversationId);
     } else {
-      // New conversation
+      // New conversation - only clear tool executions for new conversations
       setConversationId(undefined);
       conversationIdRef.current = undefined;
+      setToolExecutions(new Map());
       // Clear messages - this would need to be implemented in useChat
     }
   }, [loadConversationHistory]);
 
   // Handle new conversation
   const handleNewConversation = React.useCallback(() => {
+    console.log('🔄 NEW CONVERSATION - User clicked new chat button');
+    setIsNewConversation(true); // Flag that this is intentional new conversation
     setCurrentConversationId(undefined);
     setConversationId(undefined);
     conversationIdRef.current = undefined;
+    setIsInitialLoading(false); // Show welcome screen, not loading
     
     // Clear messages
     if (setMessages) {
       setMessages([]);
+    }
+    
+    // Clear from localStorage
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(CONVERSATION_ID_KEY);
     }
   }, []); // Remove setMessages dependency to prevent instability
 
@@ -335,17 +621,8 @@ export default function Page() {
     }
   }, [messages, walletAddress, conversationId]);
 
-  // Load conversation ID from localStorage on mount - only run once when messages first appear
-  React.useEffect(() => {
-    if (typeof window !== 'undefined' && messages.length > 0 && !conversationId) {
-      const savedConversationId = localStorage.getItem(CONVERSATION_ID_KEY);
-      if (savedConversationId) {
-        setConversationId(savedConversationId);
-        conversationIdRef.current = savedConversationId;
-        console.log("Loaded conversation ID from storage:", savedConversationId);
-      }
-    }
-  }, [messages.length, conversationId]); // Add conversationId to prevent multiple calls
+  // This useEffect was replaced by the auto-load conversation logic above
+  // to prevent conflicts and ensure proper conversation loading on refresh
 
   // Update ref and localStorage when conversationId changes
   React.useEffect(() => {
@@ -413,6 +690,39 @@ export default function Page() {
                         setConversationId(convId);
                         conversationIdRef.current = convId;
                       }
+                      
+                      // Handle tool execution events using AI SDK data-* format
+                      if (parsed.type === 'data-tool-execution' && parsed.data?.toolExecution) {
+                        const toolData = parsed.data.toolExecution as ToolExecution;
+                        console.log('🔧 Intercepted tool execution:', toolData.label, toolData.status);
+                        console.log('🔧 Tool data:', toolData);
+                        
+                        setToolExecutions(prev => {
+                          const currentMessageId = 'current'; // We'll use current message since we don't have specific message ID yet
+                          const currentTools = prev.get(currentMessageId) || [];
+                          
+                          // Update existing tool or add new one
+                          const existingIndex = currentTools.findIndex(t => t.id === toolData.id);
+                          let updatedTools: ToolExecution[];
+                          
+                          if (existingIndex >= 0) {
+                            updatedTools = [...currentTools];
+                            updatedTools[existingIndex] = toolData;
+                          } else {
+                            updatedTools = [...currentTools, toolData];
+                          }
+                          
+                          const newMap = new Map(prev);
+                          newMap.set(currentMessageId, updatedTools);
+                          
+                          // Save to localStorage (for 'current' we don't save yet, wait for message completion)
+                          if (currentMessageId !== 'current') {
+                            saveToolExecutionsToStorage(currentMessageId, updatedTools);
+                          }
+                          
+                          return newMap;
+                        });
+                      }
                     } catch (e) {
                       // Skip malformed JSON
                     }
@@ -435,16 +745,18 @@ export default function Page() {
   }, [conversationId]);
 
   // Reset conversation when messages are cleared (new conversation)
+  // BUT NOT on initial page load when messages naturally start empty
   React.useEffect(() => {
-    if (messages.length === 0) {
+    if (messages.length === 0 && isHydrated && conversationId) {
+      // Only clear if we previously had a conversation (not on initial load)
+      console.log("Conversation reset - clearing conversation ID because messages were cleared");
       setConversationId(undefined);
       conversationIdRef.current = undefined;
       if (typeof window !== 'undefined') {
         localStorage.removeItem(CONVERSATION_ID_KEY);
       }
-      console.log("Conversation reset - clearing conversation ID");
     }
-  }, [messages.length]);
+  }, [messages.length, isHydrated, conversationId]);
 
   React.useEffect(() => {
     const el = messagesRef.current;
@@ -489,6 +801,35 @@ export default function Page() {
       }
     }
   }, [messages, sending]);
+
+  // Monitor for completed messages and move 'current' tools to message ID
+  React.useEffect(() => {
+    const lastMessage = messages[messages.length - 1];
+    if (!lastMessage || lastMessage.role !== 'assistant') return;
+    
+    // Check if this is a completed assistant message (has text content and not currently generating)
+    const hasTextContent = Array.isArray((lastMessage as any).parts) && 
+      (lastMessage as any).parts.some((p: any) => p.type === 'text' && typeof p.text === 'string' && p.text.length > 0);
+      
+    if (hasTextContent && !isGenerating && !sending) {
+      // Check if we have 'current' tools that need to be moved to this message
+      const currentTools = toolExecutions.get('current');
+      if (currentTools && currentTools.length > 0) {
+        console.log('🔄 Moving tools from current to completed message:', lastMessage.id);
+        setToolExecutions(prev => {
+          const newMap = new Map(prev);
+          newMap.set(lastMessage.id, currentTools);
+          newMap.delete('current');
+          
+          // Save to localStorage
+          saveToolExecutionsToStorage(lastMessage.id, currentTools);
+          console.log('💾 Saved tools for completed message:', lastMessage.id);
+          
+          return newMap;
+        });
+      }
+    }
+  }, [messages, isGenerating, sending, toolExecutions, saveToolExecutionsToStorage]);
 
   const onFilesSelected = React.useCallback(async (list: FileList | null) => {
     if (!list || list.length === 0) return;
@@ -613,15 +954,15 @@ export default function Page() {
     const messageText = input;
     const messageFiles = [...files];
     
-    // Clear input and files immediately
+    // Clear input and files immediately (but keep object URLs alive for previews)
     setInput("");
-    files.forEach((f) => f.url && URL.revokeObjectURL(f.url));
     setFiles([]);
 
     setSending(true);
     setConnectionError(null); // Clear any previous errors
     setIsGenerating(false); // Reset generation state for new message
     setCurrentTaskId(null);
+    setIsNewConversation(false); // Reset new conversation flag when sending message
     
     // Clear any existing timeout
     if (sendingTimeoutRef.current) {
@@ -636,6 +977,25 @@ export default function Page() {
       setIsGenerating(false);
       setCurrentTaskId(null);
       setConnectionError('Request timed out. The AI service may be experiencing issues. Please try again.');
+      
+      // Update any running tool executions to error state due to timeout
+      setToolExecutions(prev => {
+        const currentTools = prev.get('current') || [];
+        if (currentTools.length > 0) {
+          console.log('🔧 Marking running tools as failed due to timeout');
+          const updatedTools = currentTools.map(tool => {
+            if (tool.status === 'start') {
+              return { ...tool, status: 'error' as const, label: `${tool.label} (Timeout)` };
+            }
+            return tool;
+          });
+          const newMap = new Map(prev);
+          newMap.set('current', updatedTools);
+          return newMap;
+        }
+        return prev;
+      });
+      
       sendingTimeoutRef.current = null;
     }, 90000);
     
@@ -807,17 +1167,39 @@ export default function Page() {
             .join("\n")
         : "";
 
-      // Send message with uploaded files
+      // Build client-side attachment previews for this message
+      const clientAttachments: BubbleAttachment[] = messageFiles.map((f) => ({
+        id: f.id,
+        name: f.name,
+        size: f.size,
+        type: f.type,
+        url: f.isUrl ? f.fileUrl : undefined,
+        previewUrl: f.type.startsWith('image/') ? f.url : (f.isUrl && (f.url || '').length ? f.url : undefined),
+      }));
+
+      // Send message with uploaded files and client-side preview metadata
       await sendMessage({
         parts: [{ type: "text", text: messageText + attachmentSummary }],
         ...(currentConversationId || walletAddress || uploadedFiles.length > 0 ? {
           data: { 
             ...(walletAddress && { walletAddress: walletAddress }),
             ...(currentConversationId && { conversationId: currentConversationId }),
-            ...(uploadedFiles.length > 0 && { files: uploadedFiles })
+            ...(uploadedFiles.length > 0 && { files: uploadedFiles }),
+            ...(clientAttachments.length > 0 && { clientAttachments })
           } as any
         } : {})
       });
+
+      // Schedule cleanup of any temporary object URLs used for previews
+      try {
+        messageFiles.forEach((f) => {
+          if (!f.isUrl && f.url) {
+            setTimeout(() => {
+              try { URL.revokeObjectURL(f.url!); } catch {}
+            }, 60000);
+          }
+        });
+      } catch {}
       
       // Clear timeout on successful send
       if (sendingTimeoutRef.current) {
@@ -864,6 +1246,18 @@ export default function Page() {
         setIsGenerating(false);
         setCurrentTaskId(null);
         setSending(false);
+        // Mark any current running tools as interrupted for UI clarity
+        setToolExecutions(prev => {
+          const newMap = new Map(prev);
+          const currentTools = newMap.get('current');
+          if (currentTools && currentTools.length > 0) {
+            const interrupted = currentTools.map(t => (
+              t.status === 'start' ? { ...t, status: 'error' as const, label: `${t.label} (Interrupted)` } : t
+            ));
+            newMap.set('current', interrupted);
+          }
+          return newMap;
+        });
       } else {
         console.error('Failed to stop generation:', response.status);
         setConnectionError('Failed to stop generation. Please try again.');
@@ -891,11 +1285,17 @@ export default function Page() {
 
         {/* Main content area */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {!isHydrated ? (
-            // Loading screen during hydration
+          {isUnifiedLoading ? (
+            // Unified loading screen for hydration and conversation history
             <div className="flex-1 flex flex-col items-center justify-center p-6">
-              <div className="animate-spin h-8 w-8 border-2 border-emerald-600 border-t-transparent rounded-full mb-4"></div>
-              <p className="text-sm text-muted-foreground">Loading...</p>
+              <div className="relative mb-6">
+                <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-emerald-100 to-emerald-200 flex items-center justify-center shadow-inner">
+                  <div className="h-6 w-6 border-2 border-emerald-600/80 border-t-transparent rounded-full animate-spin"></div>
+                </div>
+                <div className="absolute -top-1 -right-1 h-2.5 w-2.5 bg-emerald-500 rounded-full animate-pulse" />
+              </div>
+              <p className="text-sm text-gray-600">{unifiedLoader.title}</p>
+              <p className="text-xs text-gray-400 mt-2">{unifiedLoader.subtitle}</p>
             </div>
           ) : !walletAddress ? (
             // Wallet connection required screen (minimalist welcome)
@@ -922,7 +1322,7 @@ export default function Page() {
                     </div>
                   </div>
                     <div className="text-xs text-gray-500">
-                      Use the “Connect Wallet” button in the left sidebar to continue.
+                      Use the "Connect Wallet" button in the left sidebar to continue.
                 </div>
               </div>
             </div>
@@ -942,17 +1342,21 @@ export default function Page() {
                 >
                     <div className="px-6 py-8 mx-auto max-w-4xl w-full">
                     
-                  {isLoadingHistory && (
-                        <div className="flex items-center justify-center h-full min-h-[60vh]">
-                      <div className="text-center">
-                            <div className="animate-spin h-10 w-10 border-3 border-emerald-600 border-t-transparent rounded-full mx-auto mb-4"></div>
-                            <p className="text-lg font-medium text-gray-700 mb-1">Loading conversation history</p>
-                            <p className="text-sm text-gray-500">Please wait while we retrieve your messages...</p>
-                      </div>
-                    </div>
-                  )}
+                  {/* Unified loader already shown above; avoid second loader here */}
                   {/* Empty-state like ChatGPT: input centered until first message */}
-                  {!isLoadingHistory && messages.length === 0 ? (
+                   {(() => {
+                     const shouldShowWelcome = !isLoadingHistory && !isInitialLoading && messages.length === 0;
+                     console.log('🔄 WELCOME SCREEN CHECK:', {
+                       shouldShowWelcome,
+                       isLoadingHistory,
+                       isInitialLoading,
+                       messagesLength: messages.length,
+                       conversationId,
+                       currentConversationId,
+                       isNewConversation
+                     });
+                     return shouldShowWelcome;
+                   })() ? (
                         <div className="h-full w-full flex items-center justify-center min-h-[60vh]">
                       <div className="max-w-3xl w-full">
                             <div className="text-center mb-8">
@@ -969,8 +1373,11 @@ export default function Page() {
                         </div>
                         <div
                           className={cn(
-                            "rounded-xl border relative",
-                            drag === "over" ? "border-emerald-500 bg-emerald-50" : "border-muted"
+                            "rounded-2xl border relative transition-all duration-300 shadow-lg hover:shadow-xl",
+                            "bg-gradient-to-br from-white via-white to-gray-50/30 backdrop-blur-sm",
+                            drag === "over" 
+                              ? "border-emerald-400 bg-gradient-to-br from-emerald-50 to-emerald-100/50 shadow-emerald-200/50 scale-[1.02]" 
+                              : "border-gray-200/60 hover:border-emerald-300/50"
                           )}
                           onDragEnter={(e) => {
                             e.preventDefault();
@@ -986,53 +1393,62 @@ export default function Page() {
                           }}
                           onDrop={onDrop}
                         >
-                          <div className="p-4 sm:p-5">
+                          <div className="p-5 sm:p-6">
                             <Textarea
                               value={input}
                               onChange={(e) => setInput(e.target.value)}
                               onKeyDown={handleKeyDown}
                               placeholder="Describe your ideal shop or business plan, upload your product files—Darwin will take it from there."
-                              className="min-h-[120px] resize-y"
+                              className={cn(
+                                "min-h-[120px] resize-y border-0 bg-transparent text-gray-800 placeholder:text-gray-500",
+                                "focus:ring-0 focus:outline-none text-base leading-relaxed",
+                                "transition-all duration-200"
+                              )}
                             />
-                            <div className="flex items-center justify-between mt-3">
+                            <div className="flex items-center justify-between mt-4">
                                   <div className="relative" ref={attachMenuRef}>
                               <Button
                                 variant="ghost"
                                 aria-label="Attach"
-                                      className="h-12 w-12 p-0 rounded-xl transition-all duration-200 hover:bg-gray-100/80 hover:shadow-sm border border-gray-200/50 bg-white/60 backdrop-blur-sm flex items-center justify-center"
+                                      className={cn(
+                                        "h-12 w-12 p-0 rounded-xl transition-all duration-200 border shadow-sm",
+                                        "bg-gradient-to-br from-white to-gray-50/80 border-gray-200/60",
+                                        "hover:from-emerald-50 hover:to-emerald-100/50 hover:border-emerald-300/60 hover:shadow-md hover:scale-105",
+                                        "active:scale-95 backdrop-blur-sm flex items-center justify-center"
+                                      )}
                                       onClick={() => setShowAttachMenu(!showAttachMenu)}
                                     >
-                                      <Paperclip className="h-5 w-5 text-gray-600" />
+                                      <Paperclip className="h-5 w-5 text-gray-600 hover:text-emerald-700 transition-colors" />
                                     </Button>
                                     {showAttachMenu && (
-                                      <div className="absolute bottom-full left-0 mb-2 bg-white border border-gray-200 rounded-lg shadow-lg py-2 min-w-[200px] z-50">
+                                      <div className="absolute bottom-full left-0 sm:left-0 mb-3 bg-white/95 backdrop-blur-md border border-gray-200/60 rounded-xl shadow-xl py-3 w-[220px] sm:min-w-[220px] z-50 animate-in slide-in-from-bottom-2 duration-200 -translate-x-1/2 sm:translate-x-0 overflow-hidden">
                                         <button
-                                          className="flex items-center gap-3 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                                          className="flex items-center gap-3 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gradient-to-r hover:from-blue-50 hover:to-blue-100/50 transition-all duration-200"
                                           onClick={() => {
                                             document.getElementById('file-input-top')?.click();
                                             setShowAttachMenu(false);
                                           }}
                                         >
-                                          <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
-                                            📁
+                                          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-100 to-blue-200/50 flex items-center justify-center shadow-sm">
+                                            <span className="text-lg">📁</span>
                                           </div>
                                           <div className="text-left">
-                                            <div className="font-medium">Upload files</div>
+                                            <div className="font-medium text-gray-800">Upload files</div>
                                             <div className="text-xs text-gray-500">Choose files from your device</div>
                                           </div>
                                         </button>
                                         <button
-                                          className="flex items-center gap-3 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                                          className="flex items-center gap-3 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gradient-to-r hover:from-green-50 hover:to-green-100/50 transition-all duration-200"
                                           onClick={() => {
                                             setShowUrlInput(true);
                                             setShowAttachMenu(false);
                                           }}
                                         >
-                                          <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center">
-                                            🔗
+                                          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-green-100 to-green-200/50 flex items-center justify-center shadow-sm">
+                                            <span className="text-lg">🔗</span>
                                           </div>
                                           <div className="text-left">
-                                            <div className="font-medium">Add from URL</div>
+                                            <div className="font-medium text-gray-800">Add from URL</div>
                                             <div className="text-xs text-gray-500">Link to file or image online</div>
                                           </div>
                                         </button>
@@ -1051,19 +1467,34 @@ export default function Page() {
                                       onClick={handleStopGeneration}
                                       variant="outline"
                                       aria-label="Stop generation"
-                                      className="h-12 w-12 p-0 rounded-xl border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 flex items-center justify-center"
+                                      title="Stop generation (Esc)"
+                                      className={cn(
+                                        "h-12 w-12 p-0 rounded-xl transition-all duration-200 border shadow-sm",
+                                        "bg-gradient-to-br from-red-50 to-red-100/60 border-red-200/70 text-red-600",
+                                        "hover:from-red-100 hover:to-red-200/60 hover:border-red-300/70 hover:text-red-700 hover:shadow-md hover:scale-105",
+                                        "active:scale-95 flex items-center justify-center relative"
+                                      )}
                                     >
-                                      <Square className="h-5 w-5" />
-                              </Button>
+                                      <div className="relative">
+                                        <Square className="h-5 w-5" />
+                                        <span className="absolute -top-0.5 -right-0.5 h-2 w-2 bg-red-500 rounded-full animate-pulse" />
+                                      </div>
+                                    </Button>
                                   ) : (
                               <Button
                                 onClick={onSend}
                                 disabled={sending || (!input.trim() && files.length === 0)}
                                 aria-label="Send"
-                                className="h-12 w-12 p-0 rounded-xl flex items-center justify-center"
+                                className={cn(
+                                  "h-12 w-12 p-0 rounded-xl transition-all duration-200 shadow-md",
+                                  "bg-gradient-to-br from-emerald-500 to-emerald-600 text-white border-0",
+                                  "hover:from-emerald-600 hover:to-emerald-700 hover:shadow-lg hover:scale-105",
+                                  "active:scale-95 disabled:from-gray-300 disabled:to-gray-400 disabled:shadow-sm disabled:scale-100",
+                                  "flex items-center justify-center"
+                                )}
                               >
                                 {sending ? (
-                                  <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                                 ) : (
                                   <Send className="h-5 w-5" />
                                 )}
@@ -1071,39 +1502,53 @@ export default function Page() {
                                   )}
                             </div>
                                 {showUrlInput && (
-                                  <div className="mt-3 flex gap-2">
-                                    <input
-                                      type="url"
-                                      value={urlInput}
-                                      onChange={(e) => setUrlInput(e.target.value)}
-                                      placeholder="Enter file URL (e.g., https://example.com/image.jpg)"
-                                      className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                                      onKeyDown={(e) => {
-                                        if (e.key === 'Enter') onUrlAdd();
-                                        if (e.key === 'Escape') {
+                                  <div className="mt-4 p-4 bg-gradient-to-r from-gray-50 to-gray-100/50 rounded-xl border border-gray-200/60 animate-in slide-in-from-top-2 duration-200">
+                                    <div className="flex gap-3">
+                                      <input
+                                        type="url"
+                                        value={urlInput}
+                                        onChange={(e) => setUrlInput(e.target.value)}
+                                        placeholder="Enter file URL (e.g., https://example.com/image.jpg)"
+                                        className={cn(
+                                          "flex-1 px-4 py-3 bg-white border border-gray-200/60 rounded-xl text-sm",
+                                          "focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300",
+                                          "placeholder:text-gray-400 transition-all duration-200 shadow-sm"
+                                        )}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') onUrlAdd();
+                                          if (e.key === 'Escape') {
+                                            setShowUrlInput(false);
+                                            setUrlInput("");
+                                          }
+                                        }}
+                                        autoFocus
+                                      />
+                                      <Button
+                                        onClick={onUrlAdd}
+                                        size="sm"
+                                        disabled={!urlInput.trim()}
+                                        className="px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 transition-all duration-200 shadow-sm hover:shadow-md hover:scale-105 active:scale-95"
+                                      >
+                                        <span className="flex items-center gap-1">
+                                          <span>Add</span>
+                                          <span className="text-xs opacity-75">✓</span>
+                                        </span>
+                                      </Button>
+                                      <Button
+                                        onClick={() => {
                                           setShowUrlInput(false);
                                           setUrlInput("");
-                                        }
-                                      }}
-                                      autoFocus
-                                    />
-                                    <Button
-                                      onClick={onUrlAdd}
-                                      size="sm"
-                                      disabled={!urlInput.trim()}
-                                    >
-                                      Add
-                                    </Button>
-                                    <Button
-                                      onClick={() => {
-                                        setShowUrlInput(false);
-                                        setUrlInput("");
-                                      }}
-                                      size="sm"
-                                      variant="outline"
-                                    >
-                                      Cancel
-                                    </Button>
+                                        }}
+                                        size="sm"
+                                        variant="outline"
+                                        className="px-4 rounded-xl border-gray-300 hover:bg-gray-50 transition-all duration-200 hover:scale-105 active:scale-95"
+                                      >
+                                        <span className="flex items-center gap-1">
+                                          <span>Cancel</span>
+                                          <span className="text-xs opacity-75">✕</span>
+                                        </span>
+                                      </Button>
+                                    </div>
                                   </div>
                                 )}
                             <AttachmentChips
@@ -1112,6 +1557,22 @@ export default function Page() {
                                 setFiles((prev) => prev.filter((f) => f.id !== id))
                               }
                             />
+                            {sending && (
+                              <div className="mt-4">
+                                <MessageBubble role="system">
+                                  <div className="flex items-center gap-3">
+                                    <div className="flex space-x-1 items-center">
+                                      <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce" style={{animationDelay: '-0.3s'}}></div>
+                                      <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce" style={{animationDelay: '-0.15s'}}></div>
+                                      <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce"></div>
+                                    </div>
+                                    <span className="text-sm text-muted-foreground animate-pulse">
+                                      Darwin is thinking...
+                                    </span>
+                                  </div>
+                                </MessageBubble>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1119,14 +1580,31 @@ export default function Page() {
                   ) : !isLoadingHistory ? (
                     // Generative UI Chatbot rendering of message parts:
                         <div className="flex flex-col gap-6 pb-8">
-                      {messages.map((m) => (
-                        <MessageBubble key={m.id} role={m.role as any}>
-                          {m.parts.map((part, index) => {
-                            switch (part.type) {
-                              case "text":
-                                return <div key={index}>{part.text}</div>;
-                              case "reasoning":
-                                return <pre key={index}>{part.text}</pre>;
+                      {messages.map((m) => {
+                        // Get tools for this message - check both message ID and 'current' for active streaming
+                        const messageTools = toolExecutions.get(m.id) || [];
+                        const currentTools = toolExecutions.get('current') || [];
+                        const isLastMessage = m === messages[messages.length - 1];
+                        
+                        // For the last message, combine stored tools with current streaming tools
+                        const finalTools = isLastMessage && currentTools.length > 0 ? currentTools : messageTools;
+                        const lookupKey = isLastMessage && currentTools.length > 0 ? 'current' : m.id;
+                        
+                        if (finalTools.length > 0) {
+                          console.log('🎯 Rendering tools for message:', m.id, 'lookup key:', lookupKey, 'tools count:', finalTools.length);
+                          console.log('🎯 Tools:', finalTools.map(t => `${t.label}(${t.status})`));
+                        }
+                        
+                        return (
+                          <MessageBubble key={m.id} role={m.role as any} tools={m.role === 'assistant' ? finalTools : []}>
+                            {m.parts.map((part, index) => {
+                              switch (part.type) {
+                                case "text":
+                                  return m.role === 'assistant'
+                                    ? <React.Fragment key={index}>{part.text}</React.Fragment>
+                                    : <div key={index}>{part.text}</div>;
+                                case "reasoning":
+                                  return <pre key={index}>{part.text}</pre>;
                               // Example typed tool part rendering (will only appear if server provides tools)
                               case "tool-askForConfirmation": {
                                 const callId = part.toolCallId;
@@ -1198,11 +1676,18 @@ export default function Page() {
                                 return null;
                             }
                           })}
-                        </MessageBubble>
-                      ))}
+                          {m.role === 'user' && (
+                            <BubbleAttachmentPreview
+                              attachments={(m as any)?.data?.clientAttachments as BubbleAttachment[] | undefined}
+                              isUser
+                            />
+                          )}
+                          </MessageBubble>
+                        );
+                      })}
                       
-                      {/* Loading indicator when sending message */}
-                      {sending && (
+                      {/* Loading indicator when sending message - hide when we have tool executions */}
+                      {sending && !toolExecutions.has('current') && (
                         <MessageBubble role="system">
                           <div className="flex items-center gap-3">
                                 <div className="flex space-x-1 items-center">
@@ -1222,13 +1707,13 @@ export default function Page() {
               </div>
 
               {messages.length > 0 && (
-                    <div className="px-6 py-4 border-t border-gray-100 bg-white/80 backdrop-blur-sm">
+                    <div className="px-6 py-5 border-t border-gray-100/60 bg-gradient-to-t from-white via-white to-gray-50/20 backdrop-blur-sm">
                       <div
                         className={cn(
-                          "mx-auto max-w-4xl relative",
-                          "bg-white border border-gray-200/60 rounded-2xl shadow-sm hover:shadow-md transition-all duration-200",
-                          "p-4",
-                          drag === "over" && "ring-2 ring-emerald-400/50 border-emerald-300 bg-emerald-50/30"
+                          "mx-auto max-w-4xl relative transition-all duration-300",
+                          "bg-gradient-to-br from-white via-white to-gray-50/30 border border-gray-200/60 rounded-2xl shadow-lg hover:shadow-xl backdrop-blur-sm",
+                          "p-5",
+                          drag === "over" && "ring-2 ring-emerald-400/50 border-emerald-300 bg-gradient-to-br from-emerald-50 to-emerald-100/50 scale-[1.01]"
                         )}
                   onDragEnter={(e) => {
                     e.preventDefault();
@@ -1257,19 +1742,16 @@ export default function Page() {
                             </button>
                           </div>
                         )}
-                        <div className="flex items-end gap-3">
+                        <div className="flex items-end gap-4">
                       <Textarea
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={handleKeyDown}
                         placeholder="Type a message or drop files here…"
                             className={cn(
-                              "min-h-[56px] max-h-[160px] resize-y",
-                              "border-gray-200/50 rounded-xl transition-all duration-200",
-                              "focus:border-emerald-300 focus:ring-2 focus:ring-emerald-200/50",
-                              "bg-white/80 backdrop-blur-sm",
-                              "placeholder:text-gray-400 text-gray-700",
-                              "shadow-sm hover:shadow-md focus:shadow-md"
+                              "min-h-[56px] max-h-[160px] resize-y border-0 bg-transparent",
+                              "focus:ring-0 focus:outline-none text-base text-gray-800 placeholder:text-gray-500",
+                              "leading-relaxed transition-all duration-200"
                             )}
                           />
                           <div className="relative" ref={attachMenuBottomRef}>
@@ -1277,44 +1759,44 @@ export default function Page() {
                         variant="ghost"
                         aria-label="Attach"
                               className={cn(
-                                "shrink-0 h-12 w-12 p-0 rounded-xl transition-all duration-200",
-                                "hover:bg-gray-100/80 hover:shadow-sm",
-                                "border border-gray-200/50 hover:border-gray-300/50",
-                                "bg-white/60 backdrop-blur-sm flex items-center justify-center"
+                                "shrink-0 h-12 w-12 p-0 rounded-xl transition-all duration-200 border shadow-sm",
+                                "bg-gradient-to-br from-white to-gray-50/80 border-gray-200/60",
+                                "hover:from-emerald-50 hover:to-emerald-100/50 hover:border-emerald-300/60 hover:shadow-md hover:scale-105",
+                                "active:scale-95 backdrop-blur-sm flex items-center justify-center"
                               )}
                               onClick={() => setShowAttachMenu(!showAttachMenu)}
                             >
-                              <Paperclip className="h-5 w-5 text-gray-600" />
+                              <Paperclip className="h-5 w-5 text-gray-600 hover:text-emerald-700 transition-colors" />
                             </Button>
                             {showAttachMenu && (
-                              <div className="absolute bottom-full left-0 mb-2 bg-white border border-gray-200 rounded-lg shadow-lg py-2 min-w-[200px] z-50">
+                              <div className="absolute bottom-full left-0 sm:left-0 mb-3 bg-white/95 backdrop-blur-md border border-gray-200/60 rounded-xl shadow-xl py-3 w-[220px] sm:min-w-[220px] z-50 animate-in slide-in-from-bottom-2 duration-200 -translate-x-1/2 sm:translate-x-0 overflow-hidden">
                                 <button
-                                  className="flex items-center gap-3 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                                  className="flex items-center gap-3 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gradient-to-r hover:from-blue-50 hover:to-blue-100/50 transition-all duration-200"
                                   onClick={() => {
                                     document.getElementById('file-input-bottom')?.click();
                                     setShowAttachMenu(false);
                                   }}
                                 >
-                                  <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
-                                    📁
+                                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-100 to-blue-200/50 flex items-center justify-center shadow-sm">
+                                    <span className="text-lg">📁</span>
                                   </div>
                                   <div className="text-left">
-                                    <div className="font-medium">Upload files</div>
+                                    <div className="font-medium text-gray-800">Upload files</div>
                                     <div className="text-xs text-gray-500">Choose files from your device</div>
                                   </div>
                                 </button>
                                 <button
-                                  className="flex items-center gap-3 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                                  className="flex items-center gap-3 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gradient-to-r hover:from-green-50 hover:to-green-100/50 transition-all duration-200"
                                   onClick={() => {
                                     setShowUrlInput(true);
                                     setShowAttachMenu(false);
                                   }}
                                 >
-                                  <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center">
-                                    🔗
+                                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-green-100 to-green-200/50 flex items-center justify-center shadow-sm">
+                                    <span className="text-lg">🔗</span>
                                   </div>
                                   <div className="text-left">
-                                    <div className="font-medium">Add from URL</div>
+                                    <div className="font-medium text-gray-800">Add from URL</div>
                                     <div className="text-xs text-gray-500">Link to file or image online</div>
                                   </div>
                                 </button>
@@ -1332,15 +1814,18 @@ export default function Page() {
                             <Button
                               onClick={handleStopGeneration}
                               aria-label="Stop generation"
+                              title="Stop generation (Esc)"
                               className={cn(
-                                "shrink-0 h-12 w-12 p-0 rounded-xl transition-all duration-200",
-                                "bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700",
-                                "shadow-lg hover:shadow-xl",
-                                "border-0 text-white font-medium",
-                                "transform hover:scale-105 active:scale-95 flex items-center justify-center"
+                                "shrink-0 h-12 w-12 p-0 rounded-xl transition-all duration-200 border shadow-sm",
+                                "bg-gradient-to-br from-red-50 to-red-100/60 border-red-200/70 text-red-600",
+                                "hover:from-red-100 hover:to-red-200/60 hover:border-red-300/70 hover:text-red-700 hover:shadow-md hover:scale-105",
+                                "active:scale-95 flex items-center justify-center relative"
                               )}
                             >
-                              <Square className="h-5 w-5" />
+                              <div className="relative">
+                                <Square className="h-5 w-5" />
+                                <span className="absolute -top-0.5 -right-0.5 h-2 w-2 bg-red-500 rounded-full animate-pulse" />
+                              </div>
                       </Button>
                           ) : (
                       <Button
@@ -1348,13 +1833,11 @@ export default function Page() {
                         disabled={sending || (!input.trim() && files.length === 0)}
                         aria-label="Send"
                               className={cn(
-                                "shrink-0 h-12 w-12 p-0 rounded-xl transition-all duration-200",
-                                "bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700",
-                                "shadow-lg hover:shadow-xl",
-                                "disabled:from-gray-300 disabled:to-gray-400 disabled:shadow-sm",
-                                "border-0 text-white font-medium",
-                                "transform hover:scale-105 active:scale-95 flex items-center justify-center",
-                                sending && "animate-pulse"
+                                "shrink-0 h-12 w-12 p-0 rounded-xl transition-all duration-200 shadow-md",
+                                "bg-gradient-to-br from-emerald-500 to-emerald-600 text-white border-0",
+                                "hover:from-emerald-600 hover:to-emerald-700 hover:shadow-lg hover:scale-105",
+                                "active:scale-95 disabled:from-gray-300 disabled:to-gray-400 disabled:shadow-sm disabled:scale-100",
+                                "flex items-center justify-center"
                               )}
                       >
                         {sending ? (
@@ -1366,39 +1849,53 @@ export default function Page() {
                           )}
                     </div>
                         {showUrlInput && (
-                          <div className="mt-3 flex gap-2">
-                            <input
-                              type="url"
-                              value={urlInput}
-                              onChange={(e) => setUrlInput(e.target.value)}
-                              placeholder="Enter file URL (e.g., https://example.com/image.jpg)"
-                              className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') onUrlAdd();
-                                if (e.key === 'Escape') {
+                          <div className="mt-4 p-4 bg-gradient-to-r from-gray-50 to-gray-100/50 rounded-xl border border-gray-200/60 animate-in slide-in-from-top-2 duration-200">
+                            <div className="flex gap-3">
+                              <input
+                                type="url"
+                                value={urlInput}
+                                onChange={(e) => setUrlInput(e.target.value)}
+                                placeholder="Enter file URL (e.g., https://example.com/image.jpg)"
+                                className={cn(
+                                  "flex-1 px-4 py-3 bg-white border border-gray-200/60 rounded-xl text-sm",
+                                  "focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300",
+                                  "placeholder:text-gray-400 transition-all duration-200 shadow-sm"
+                                )}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') onUrlAdd();
+                                  if (e.key === 'Escape') {
+                                    setShowUrlInput(false);
+                                    setUrlInput("");
+                                  }
+                                }}
+                                autoFocus
+                              />
+                              <Button
+                                onClick={onUrlAdd}
+                                size="sm"
+                                disabled={!urlInput.trim()}
+                                className="px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 transition-all duration-200 shadow-sm hover:shadow-md hover:scale-105 active:scale-95"
+                              >
+                                <span className="flex items-center gap-1">
+                                  <span>Add</span>
+                                  <span className="text-xs opacity-75">✓</span>
+                                </span>
+                              </Button>
+                              <Button
+                                onClick={() => {
                                   setShowUrlInput(false);
                                   setUrlInput("");
-                                }
-                              }}
-                              autoFocus
-                            />
-                            <Button
-                              onClick={onUrlAdd}
-                              size="sm"
-                              disabled={!urlInput.trim()}
-                            >
-                              Add
-                            </Button>
-                            <Button
-                              onClick={() => {
-                                setShowUrlInput(false);
-                                setUrlInput("");
-                              }}
-                              size="sm"
-                              variant="outline"
-                            >
-                              Cancel
-                            </Button>
+                                }}
+                                size="sm"
+                                variant="outline"
+                                className="px-4 rounded-xl border-gray-300 hover:bg-gray-50 transition-all duration-200 hover:scale-105 active:scale-95"
+                              >
+                                <span className="flex items-center gap-1">
+                                  <span>Cancel</span>
+                                  <span className="text-xs opacity-75">✕</span>
+                                </span>
+                              </Button>
+                            </div>
                           </div>
                         )}
                     <AttachmentChips
