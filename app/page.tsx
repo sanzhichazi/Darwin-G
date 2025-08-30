@@ -1,1962 +1,1043 @@
-"use client";
+"use client"
 
-import * as React from "react";
-import { useChat } from "@ai-sdk/react";
-import {
-  lastAssistantMessageIsCompleteWithToolCalls,
-} from "ai";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Paperclip, Send, Sparkles, Square } from 'lucide-react';
-import {
-  MessageBubble,
-  AttachmentChips,
-  type AttachmentPreview,
-    BubbleAttachmentPreview,
-    type BubbleAttachment,
-} from "@/components/chat-bubbles";
-import { type ToolExecution } from "@/components/tool-execution";
-import { cn } from "@/lib/utils";
-import { STORAGE_KEY } from "@/components/wallet-connect";
-import { 
-  saveConversation, 
-  deleteConversation,
-  generateConversationTitle,
-  convertDifyMessagesToLocal,
-  getConversations,
-  syncConversationsFromDify,
-  type Conversation,
-  type DifyHistoryResponse
-} from "@/lib/conversation";
+import * as React from "react"
+import { useChat } from "@ai-sdk/react"
+import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls } from "ai"
+import { Button } from "@/components/ui/button"
+import { Textarea } from "@/components/ui/textarea"
+import { Paperclip, Send, Settings } from "lucide-react"
+import { MessageBubble, AttachmentChips, type AttachmentPreview } from "@/components/chat-bubbles"
+import { cn } from "@/lib/utils"
+import { STORAGE_KEY } from "@/components/wallet-connect"
+import { Sidebar } from "@/components/sidebar"
+import { Dashboard } from "@/components/dashboard"
+import { Response } from "@/components/ai-elements/response"
 
-const CONVERSATION_ID_KEY = "darwin_conversation_id";
-import { Sidebar } from "@/components/sidebar"; // Import the new Sidebar component
+const BRAND_COLOR = "rgb(249, 217, 247)"
 
-const BRAND_COLOR = "rgb(249, 217, 247)";
-
-type DragState = "idle" | "over";
+type DragState = "idle" | "over"
 
 export default function Page() {
+  const [activeMainTab, setActiveMainTab] = React.useState<
+    "dashboard" | "chat" | "products" | "marketing" | "crm" | "risk" | "stores"
+  >("dashboard")
+
+  const [marketingTab, setMarketingTab] = React.useState<"twitter" | "email" | "settings">("twitter")
+
   const {
     messages,
     sendMessage,
     addToolResult,
-    setMessages,
     // Automatically send after tool calls complete (Generative UI pattern)
   } = useChat({
+    transport: new DefaultChatTransport({
+      api: "/api/chat",
+    }),
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
-    onFinish: (message: any) => {
-      console.log('✅ onFinish called with message:', message);
-      
-      // Reset generation state when finished
-      console.log('🔄 Resetting all generation states in onFinish');
-      setIsGenerating(false);
-      setCurrentTaskId(null);
-      setSending(false);
-      
-      // Move current tool executions to the actual message ID and save to localStorage
-      if (message && message.id) {
-        console.log('✅ onFinish called with message ID:', message.id);
-        setToolExecutions(prev => {
-          const currentTools = prev.get('current');
-          console.log('🔧 Current tools found:', currentTools ? currentTools.length : 0);
-          if (currentTools && currentTools.length > 0) {
-            const newMap = new Map(prev);
-            newMap.set(message.id, currentTools);
-            newMap.delete('current');
-            
-            // Save to localStorage now that we have the actual message ID
-            console.log('💾 Saving tools for message:', message.id);
-            saveToolExecutionsToStorage(message.id, currentTools);
-            
-            console.log('🔧 Moved tools from current to message ID:', message.id);
-            return newMap;
-          } else {
-            console.log('⚠️ No current tools to move');
-          }
-          return prev;
-        });
-      } else {
-        console.log('⚠️ onFinish called but no message or message.id');
-      }
-      
-      // Refresh sidebar conversations once after a completed reply
-      setConversationRefreshTrigger(prev => prev + 1);
-      
-      // Clear sending timeout
-      if (sendingTimeoutRef.current) {
-        clearTimeout(sendingTimeoutRef.current);
-        sendingTimeoutRef.current = null;
-      }
-    },
-    onError: (error: any) => {
-      console.error('❌ useChat error:', error);
-      // Reset all generation states on error
-      console.log('🔄 Resetting all generation states in onError');
-      setIsGenerating(false);
-      setCurrentTaskId(null);
-      setSending(false);
-      setConnectionError('An error occurred while processing your message. Please try again.');
-      
-      // Update any running tool executions to error state
-      setToolExecutions(prev => {
-        const currentTools = prev.get('current') || [];
-        if (currentTools.length > 0) {
-          console.log('🔧 Marking running tools as failed due to error');
-          const updatedTools = currentTools.map(tool => {
-            if (tool.status === 'start') {
-              return { ...tool, status: 'error' as const, label: `${tool.label} (Failed)` };
-            }
-            return tool;
-          });
-          const newMap = new Map(prev);
-          newMap.set('current', updatedTools);
-          return newMap;
-        }
-        return prev;
-      });
-      
-      // Clear sending timeout
-      if (sendingTimeoutRef.current) {
-        clearTimeout(sendingTimeoutRef.current);
-        sendingTimeoutRef.current = null;
-      }
-    },
     // Example client-side tool handler (optional):
     async onToolCall({ toolCall }) {
       // You can run simple client-side tools. Here we just demo a stub handler.
       if (toolCall.toolName === "getLocation") {
         // Return a random demo city:
-        const cities = ["New York", "Los Angeles", "Chicago", "San Francisco"];
+        const cities = ["New York", "Los Angeles", "Chicago", "San Francisco"]
         addToolResult({
           tool: "getLocation",
           toolCallId: toolCall.toolCallId,
           output: cities[Math.floor(Math.random() * cities.length)],
-        });
+        })
       }
     },
-  });
+  })
 
-  const [input, setInput] = React.useState("");
-  const [sending, setSending] = React.useState(false); // 恢复sending状态
-  const [connectionError, setConnectionError] = React.useState<string | null>(null);
-  const [currentTaskId, setCurrentTaskId] = React.useState<string | null>(null);
-  const [isGenerating, setIsGenerating] = React.useState(false);
-  const [files, setFiles] = React.useState<AttachmentPreview[]>([]);
-  const [drag, setDrag] = React.useState<DragState>("idle");
-  const [showAttachMenu, setShowAttachMenu] = React.useState(false);
-  const [showUrlInput, setShowUrlInput] = React.useState(false);
-  const [urlInput, setUrlInput] = React.useState("");
-  const attachMenuRef = React.useRef<HTMLDivElement>(null);
-  const attachMenuBottomRef = React.useRef<HTMLDivElement>(null);
-  const [activeMainTab, setActiveMainTab] = React.useState<'chat' | 'products' | 'marketing' | 'crm'>('chat'); // State for active main content tab
-  const [conversationId, setConversationId] = React.useState<string | undefined>(); // State for Dify conversation continuity
-  const [walletAddress, setWalletAddress] = React.useState<string | null>(null); // State for wallet connection
-  const [currentConversationId, setCurrentConversationId] = React.useState<string | undefined>(undefined); // Current selected conversation
-  const [isLoadingHistory, setIsLoadingHistory] = React.useState(false);
-  const [conversationRefreshTrigger, setConversationRefreshTrigger] = React.useState(0); // Trigger to refresh sidebar
-  const [isHydrated, setIsHydrated] = React.useState(false); // Track hydration status
-  const [toolExecutions, setToolExecutions] = React.useState<Map<string, ToolExecution[]>>(new Map()); // Track tool executions per message
-  const [isInitialLoading, setIsInitialLoading] = React.useState(true); // Start true to prevent welcome screen flash
-  const [isNewConversation, setIsNewConversation] = React.useState(false); // Track when user explicitly wants new conversation
+  const [input, setInput] = React.useState("")
+  const [sending, setSending] = React.useState(false)
+  const [files, setFiles] = React.useState<AttachmentPreview[]>([])
+  const [drag, setDrag] = React.useState<DragState>("idle")
 
-  // Helper functions for tool executions persistence
-  const saveToolExecutionsToStorage = React.useCallback((messageId: string, tools: ToolExecution[]) => {
-    if (!walletAddress || !conversationId) return;
-    const key = `toolExecutions_${walletAddress}`;
-    try {
-      const existing = localStorage.getItem(key);
-      const allToolExecutions = existing ? JSON.parse(existing) : {};
-      
-      // Store by conversation ID and message position instead of message ID
-      // This way tools persist across message ID changes
-      const conversationKey = `${conversationId}_msg_${messages.length - 1}`; // Use message position
-      allToolExecutions[conversationKey] = { messageId, tools };
-      
-      localStorage.setItem(key, JSON.stringify(allToolExecutions));
-      console.log('💾 SAVED tool executions for conversation:', conversationKey, 'message:', messageId, 'tools count:', tools.length);
-      console.log('💾 Full localStorage key:', key);
-      console.log('💾 Tools saved:', tools.map(t => `${t.label}(${t.status})`));
-    } catch (error) {
-      console.error('Error saving tool executions:', error);
-    }
-  }, [walletAddress, conversationId, messages.length]);
-
-  const loadToolExecutionsFromStorage = React.useCallback(() => {
-    if (!walletAddress) return new Map();
-    const key = `toolExecutions_${walletAddress}`;
-    try {
-      const stored = localStorage.getItem(key);
-      console.log('🔍 LOADING tool executions from localStorage, key:', key);
-      console.log('🔍 Raw stored data:', stored);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        console.log('🔍 Parsed data:', parsed);
-        const map = new Map();
-        Object.entries(parsed).forEach(([messageId, tools]) => {
-          map.set(messageId, tools as ToolExecution[]);
-          console.log('🔍 Loaded tools for message:', messageId, 'count:', (tools as ToolExecution[]).length);
-        });
-        console.log('🔍 Final map size:', map.size);
-        return map;
-      } else {
-        console.log('🔍 No stored data found');
-      }
-    } catch (error) {
-      console.error('Error loading tool executions:', error);
-    }
-    return new Map();
-  }, [walletAddress]);
-
-  const messagesRef = React.useRef<HTMLDivElement | null>(null);
-  const conversationIdRef = React.useRef<string | undefined>(undefined); // Ref to ensure we have the latest conversationId
-  const sendingTimeoutRef = React.useRef<NodeJS.Timeout | null>(null); // Track active timeout
-
-  // Single unified loader that covers all loading phases
-  const isUnifiedLoading = React.useMemo(() => {
-    return (!isHydrated || isInitialLoading || isLoadingHistory) && activeMainTab === 'chat';
-  }, [isHydrated, isInitialLoading, isLoadingHistory, activeMainTab]);
-
-  // Progressive loading messages that smoothly transition between phases
-  const unifiedLoader = React.useMemo(() => {
-    if (!isHydrated) {
-      return { title: 'Loading Darwin', subtitle: 'Initializing your workspace...' };
-    }
-    if (isInitialLoading || isLoadingHistory) {
-      return { title: 'Loading Darwin', subtitle: 'Retrieving your conversations...' };
-    }
-    return { title: 'Loading Darwin', subtitle: 'Almost ready...' };
-  }, [isHydrated, isInitialLoading, isLoadingHistory]);
-
-  // Hydration and wallet connection status check
-  React.useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const savedWalletAddress = localStorage.getItem(STORAGE_KEY);
-      const savedConversationId = localStorage.getItem(CONVERSATION_ID_KEY);
-      console.log('🔄 HYDRATION - savedWallet:', savedWalletAddress, 'savedConversation:', savedConversationId);
-      
-      setWalletAddress(savedWalletAddress);
-      setIsHydrated(true); // Mark as hydrated after checking localStorage
-      
-      // If we have both wallet and conversation, set it up for auto-loading
-      if (savedWalletAddress && savedConversationId) {
-        console.log('🔄 IMMEDIATE LOAD - Both wallet and conversation found, setting up auto-load');
-        setCurrentConversationId(savedConversationId);
-        // Keep isInitialLoading true - it will be cleared by auto-load useEffect
-      } else {
-        console.log('🔄 NO CONVERSATION TO LOAD - Will show welcome screen');
-        // Keep isInitialLoading true - it will be cleared by auto-load useEffect
-      }
-    }
-  }, []);
-
-  // Load tool executions when wallet address changes
-  React.useEffect(() => {
-    if (walletAddress && isHydrated) {
-      console.log('🔄 Loading tool executions for wallet:', walletAddress);
-      const storedToolExecutions = loadToolExecutionsFromStorage();
-      console.log('🔄 Setting tool executions, size:', storedToolExecutions.size);
-      setToolExecutions(storedToolExecutions);
-    }
-  }, [walletAddress, isHydrated, loadToolExecutionsFromStorage]);
-
-  // Listen for wallet connection changes  
-  React.useEffect(() => {
-    const handleStorageChange = () => {
-      const savedWalletAddress = localStorage.getItem(STORAGE_KEY);
-      setWalletAddress(savedWalletAddress);
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    
-    const interval = setInterval(() => {
-      const savedWalletAddress = localStorage.getItem(STORAGE_KEY);
-      // Use the current state value from the callback to avoid dependency issues
-      setWalletAddress(currentWalletAddress => {
-        if (savedWalletAddress !== currentWalletAddress) {
-          return savedWalletAddress;
-        }
-        return currentWalletAddress;
-      });
-    }, 1000);
-
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      clearInterval(interval);
-    };
-  }, []); // Remove walletAddress dependency to prevent infinite loop
-
-  // Removed early reset of sending to avoid hiding loading bubble before text arrives
-
-  // Load conversation history when selecting a conversation
-  const loadConversationHistory = React.useCallback(async (conversationId: string) => {
-    console.log('🔄 LOAD CONVERSATION START:', { conversationId, walletAddress });
-    if (!walletAddress) {
-      console.log('❌ LOAD CONVERSATION FAILED: No wallet address');
-      setIsLoadingHistory(false);
-      setIsInitialLoading(false);
-      return;
-    }
-
-    setIsLoadingHistory(true);
-    console.log('🔄 LOAD CONVERSATION: Fetching messages from API...');
-    
-    // Set a timeout to prevent infinite loading
-    const loadTimeout = setTimeout(() => {
-      console.log('❌ LOAD CONVERSATION TIMEOUT: Taking too long, resetting states');
-      setIsLoadingHistory(false);
-      setIsInitialLoading(false);
-      setConnectionError('Loading conversation timed out. Please try again.');
-    }, 10000); // 10 second timeout
-    
-    try {
-      const response = await fetch(`/api/messages?conversation_id=${conversationId}&user=${walletAddress}`);
-      console.log('🔄 LOAD CONVERSATION: API response status:', response.status);
-      if (response.ok) {
-        const data: DifyHistoryResponse = await response.json();
-        const convertedMessages = convertDifyMessagesToLocal(data.data); // Dify API returns in correct chronological order
-        
-        // Set the conversation ID first
-        setConversationId(conversationId);
-        conversationIdRef.current = conversationId;
-        
-        // Load tool executions for this conversation's messages BEFORE setting messages
-        console.log('🔄 Loading tool executions for conversation messages...');
-        const storedToolExecutions = loadToolExecutionsFromStorage();
-        console.log('🔄 All stored tool executions size:', storedToolExecutions.size);
-        
-        const conversationToolExecutions = new Map();
-        
-        // Get all stored tool execution keys to match against
-        const storedKeys = Array.from(storedToolExecutions.keys());
-        console.log('🔍 Available stored tool keys:', storedKeys);
-        
-        // Get stored tool execution data for this wallet
-        const key = `toolExecutions_${walletAddress}`;
-        let allStoredData = {};
-        try {
-          const stored = localStorage.getItem(key);
-          if (stored) {
-            allStoredData = JSON.parse(stored);
-            console.log('🔍 Loaded stored data for tool lookup:', Object.keys(allStoredData));
-          }
-        } catch (error) {
-          console.error('Error loading stored data for tool lookup:', error);
-        }
-
-        convertedMessages.forEach((msg, index) => {
-          console.log('🔍 Checking message at index:', index, 'ID:', msg.id, 'role:', msg.role);
-          
-          // Try to find tools by conversation ID and message position
-          const conversationKey = `${conversationId}_msg_${index}`;
-          console.log('🔍 Looking for conversation key:', conversationKey);
-          
-          let tools = null;
-          
-          // Look through stored data for this conversation key
-          for (const [storageKey, storageData] of Object.entries(allStoredData)) {
-            if (storageKey === conversationKey) {
-              tools = (storageData as any).tools;
-              console.log('✅ Found tools by conversation position:', conversationKey, 'tools:', tools?.length || 0);
-              break;
-            }
-          }
-          
-          if (tools && tools.length > 0) {
-            console.log('✅ Loading tools for message:', msg.id, 'tools:', tools.length);
-            conversationToolExecutions.set(msg.id, tools);
-          } else {
-            console.log('❌ No tools found for message at position:', index);
-          }
-        });
-        
-        console.log('🔄 Setting conversation tool executions, size:', conversationToolExecutions.size);
-        
-        // Set tool executions FIRST, then messages to prevent collapse
-        setToolExecutions(conversationToolExecutions);
-        
-        // Now load messages into the chat
-        if (setMessages) {
-          setMessages(convertedMessages);
-        }
-        
-        console.log('✅ LOAD CONVERSATION SUCCESS:', convertedMessages.length, 'messages loaded');
-        console.log('✅ LOAD CONVERSATION: Loaded tool executions for', conversationToolExecutions.size, 'messages with tools');
-      } else {
-        const errorText = await response.text().catch(() => 'Unknown error');
-        console.log('❌ LOAD CONVERSATION FAILED: API error', response.status, errorText);
-        
-        if (response.status === 404) {
-          // Conversation not found, clear the saved ID and show welcome
-          console.log('🔄 CONVERSATION NOT FOUND: Clearing saved conversation ID');
-          if (typeof window !== 'undefined') {
-            localStorage.removeItem(CONVERSATION_ID_KEY);
-          }
-          setConversationId(undefined);
-          setCurrentConversationId(undefined);
-          conversationIdRef.current = undefined;
-          // Don't show error, just show welcome screen
-        } else {
-          setConnectionError(`Failed to load conversation history: ${response.status}`);
-        }
-      }
-    } catch (error) {
-      console.error('❌ LOAD CONVERSATION ERROR:', error);
-      setConnectionError('Failed to load conversation history. Please try again.');
-    } finally {
-      clearTimeout(loadTimeout); // Clear the timeout
-      console.log('🔄 LOAD CONVERSATION COMPLETE: Resetting loading states');
-      setIsLoadingHistory(false);
-      setIsInitialLoading(false);
-    }
-  }, [walletAddress]); // Remove setMessages from dependencies to prevent instability
-
-  // Auto-load last conversation on page refresh - but not when user wants new conversation
-  React.useEffect(() => {
-    // Skip if user explicitly wants new conversation
-    if (isNewConversation) {
-      console.log('🔄 Auto-load skipped - user wants new conversation');
-      return;
-    }
-
-    // Only run once after hydration when wallet is available
-    if (!walletAddress || !isHydrated) {
-      console.log('🔄 Auto-load waiting for:', { walletAddress: !!walletAddress, isHydrated });
-      return;
-    }
-
-    // If we're already loading, wait
-    if (isLoadingHistory) {
-      console.log('🔄 Auto-load skipped - already loading');
-      return;
-    }
-
-    // If we already have messages, ensure initial loading is cleared and stop
-    if (messages.length > 0) {
-      if (isInitialLoading) {
-        console.log('🔄 Messages present - clearing initial loading');
-        setIsInitialLoading(false);
-      }
-      return;
-    }
-
-    // Prefer currentConversationId, then saved ID from localStorage
-    const savedConversationId = typeof window !== 'undefined' ? localStorage.getItem(CONVERSATION_ID_KEY) : null;
-    const idToLoad = currentConversationId || savedConversationId || undefined;
-    console.log('🔄 Page refresh - idToLoad:', idToLoad, 'currentConversationId:', currentConversationId, 'saved:', savedConversationId);
-
-    if (idToLoad) {
-      if (!currentConversationId) setCurrentConversationId(idToLoad);
-      console.log('🔄 Auto-loading conversation:', idToLoad);
-      loadConversationHistory(idToLoad);
-    } else {
-      console.log('🔄 No conversation to auto-load - showing welcome');
-      setIsInitialLoading(false);
-    }
-  }, [walletAddress, isHydrated, messages.length, isLoadingHistory, currentConversationId, isNewConversation, isInitialLoading]);
-
-  // Handle conversation selection
-  const handleSelectConversation = React.useCallback((conversationId: string | undefined) => {
-    setCurrentConversationId(conversationId);
-    setIsNewConversation(false); // Reset new conversation flag when selecting existing conversation
-    
-    if (conversationId) {
-      loadConversationHistory(conversationId);
-    } else {
-      // New conversation - only clear tool executions for new conversations
-      setConversationId(undefined);
-      conversationIdRef.current = undefined;
-      setToolExecutions(new Map());
-      // Clear messages - this would need to be implemented in useChat
-    }
-  }, [loadConversationHistory]);
-
-  // Handle new conversation
-  const handleNewConversation = React.useCallback(() => {
-    console.log('🔄 NEW CONVERSATION - User clicked new chat button');
-    setIsNewConversation(true); // Flag that this is intentional new conversation
-    setCurrentConversationId(undefined);
-    setConversationId(undefined);
-    conversationIdRef.current = undefined;
-    setIsInitialLoading(false); // Show welcome screen, not loading
-    
-    // Clear messages
-    if (setMessages) {
-      setMessages([]);
-    }
-    
-    // Clear from localStorage
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem(CONVERSATION_ID_KEY);
-    }
-  }, []); // Remove setMessages dependency to prevent instability
-
-  // Handle delete conversation
-  const handleDeleteConversation = React.useCallback(async (conversationId: string) => {
-    if (!walletAddress) return;
-    
-    try {
-      // Call Dify API to delete conversation
-      const response = await fetch(`/api/conversations/${conversationId}`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          user: walletAddress
-        })
-      });
-
-      if (response.ok) {
-        // Delete from local storage after successful API deletion
-        deleteConversation(conversationId, walletAddress);
-        console.log('Conversation deleted successfully from Dify and local storage');
-        
-        // If current conversation is being deleted, start new conversation
-        if (currentConversationId === conversationId) {
-          handleNewConversation();
-        }
-        
-        // Sync with Dify to get the latest data
-        try {
-          await syncConversationsFromDify(walletAddress);
-          console.log('Synced conversations with Dify after delete');
-        } catch (error) {
-          console.warn('Failed to sync with Dify after delete:', error);
-        }
-        
-        // Trigger sidebar refresh
-        setConversationRefreshTrigger(prev => prev + 1);
-      } else {
-        const errorText = await response.text();
-        console.error('Failed to delete conversation:', response.status, errorText);
-        setConnectionError('Failed to delete conversation. Please try again.');
-      }
-    } catch (error) {
-      console.error('Error deleting conversation:', error);
-      setConnectionError('Error deleting conversation. Please check your connection and try again.');
-    }
-  }, [walletAddress, currentConversationId, handleNewConversation]);
-
-  // Handle rename conversation
-  const handleRenameConversation = React.useCallback(async (conversationId: string, newTitle: string) => {
-    if (!walletAddress) return;
-    
-    try {
-      // Call Dify API to rename conversation
-      const response = await fetch(`/api/conversations/${conversationId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          name: newTitle,
-          user: walletAddress
-        })
-      });
-
-      if (response.ok) {
-        const responseData = await response.json();
-        console.log('Dify API rename response:', responseData);
-        
-        // Use the title returned by Dify API to ensure consistency
-        const confirmedTitle = responseData.name || newTitle;
-        
-        // Update local storage with the confirmed title
-        const { renameConversation } = await import('@/lib/conversation');
-        renameConversation(conversationId, confirmedTitle, walletAddress);
-        console.log('Conversation renamed successfully to:', confirmedTitle);
-        
-        // Sync with Dify to get the latest data
-        try {
-          await syncConversationsFromDify(walletAddress);
-          console.log('Synced conversations with Dify after rename');
-        } catch (error) {
-          console.warn('Failed to sync with Dify after rename:', error);
-        }
-        
-        // Trigger sidebar refresh
-        setConversationRefreshTrigger(prev => prev + 1);
-      } else {
-        const errorText = await response.text();
-        console.error('Failed to rename conversation:', response.status, errorText);
-        setConnectionError('Failed to rename conversation. Please try again.');
-      }
-    } catch (error) {
-      console.error('Error renaming conversation:', error);
-      setConnectionError('Error renaming conversation. Please check your connection and try again.');
-    }
-  }, [walletAddress]);
-
-  // Save conversation when new messages are added
-  React.useEffect(() => {
-    if (messages.length > 0 && walletAddress && conversationId) {
-      // Get existing conversations to check if this one already exists
-      const existingConversations = getConversations(walletAddress);
-      const existingConversation = existingConversations.find(c => c.id === conversationId);
-      
-      // Get the first user message to generate title (only for new conversations)
-      const firstUserMessage = messages.find(m => m.role === 'user');
-      if (firstUserMessage) {
-        // Use existing title if conversation exists, otherwise generate new title
-        const title = existingConversation 
-          ? existingConversation.title 
-          : generateConversationTitle(
-              firstUserMessage.parts.find(p => p.type === 'text')?.text || ''
-            );
-        
-        const conversation: Conversation = {
-          id: conversationId,
-          title,
-          createdAt: existingConversation?.createdAt || Date.now(),
-          updatedAt: Date.now(),
-          messageCount: messages.length,
-          lastMessage: messages[messages.length - 1]?.parts.find(p => p.type === 'text')?.text || '',
-          walletAddress
-        };
-        
-        saveConversation(conversation);
-        setCurrentConversationId(conversationId);
-      }
-    }
-  }, [messages, walletAddress, conversationId]);
-
-  // This useEffect was replaced by the auto-load conversation logic above
-  // to prevent conflicts and ensure proper conversation loading on refresh
-
-  // Update ref and localStorage when conversationId changes
-  React.useEffect(() => {
-    conversationIdRef.current = conversationId;
-    if (typeof window !== 'undefined') {
-      if (conversationId) {
-        localStorage.setItem(CONVERSATION_ID_KEY, conversationId);
-        console.log("ConversationId updated and saved:", conversationId);
-      } else {
-        localStorage.removeItem(CONVERSATION_ID_KEY);
-        console.log("ConversationId cleared from storage");
-      }
-    }
-  }, [conversationId]);
-
-  // Add custom stream handling for metadata capture (conversation ID and task ID)
-  React.useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const originalFetch = window.fetch;
-      
-      window.fetch = async (input, init) => {
-        const response = await originalFetch(input, init);
-        
-        // Only intercept chat API calls
-        if (typeof input === 'string' && input.includes('/api/chat') && init?.method === 'POST') {
-          console.log('Intercepting chat API call for metadata');
-          
-          // Clone response to avoid consuming the stream
-          const clonedResponse = response.clone();
-          
-          // Read the stream in background to extract metadata
-          setTimeout(async () => {
-            try {
-              const reader = clonedResponse.body?.getReader();
-              if (!reader) return;
-              
-              let buffer = '';
-              while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                
-                buffer += new TextDecoder().decode(value);
-                const lines = buffer.split('\n');
-                buffer = lines.pop() || '';
-                
-                for (const line of lines) {
-                  if (line.startsWith('data: ')) {
-                    const data = line.slice(6);
-                    if (data === '[DONE]') continue;
-                    
-                    try {
-                      const parsed = JSON.parse(data);
-                      
-                      // Handle AI SDK-compatible data-* events (payload in parsed.data)
-                      if (parsed.type === 'data-task-id' && parsed.data?.taskId) {
-                        const taskId = parsed.data.taskId as string;
-                        console.log('Intercepted task ID from data-*:', taskId);
-                        setCurrentTaskId(taskId);
-                        setIsGenerating(true);
-                      }
-                      
-                      if (parsed.type === 'data-conversation-id' && parsed.data?.conversationId) {
-                        const convId = parsed.data.conversationId as string;
-                        console.log('Intercepted conversation ID from data-*:', convId);
-                        setConversationId(convId);
-                        conversationIdRef.current = convId;
-                      }
-                      
-                      // Handle tool execution events using AI SDK data-* format
-                      if (parsed.type === 'data-tool-execution' && parsed.data?.toolExecution) {
-                        const toolData = parsed.data.toolExecution as ToolExecution;
-                        console.log('🔧 Intercepted tool execution:', toolData.label, toolData.status);
-                        console.log('🔧 Tool data:', toolData);
-                        
-                        setToolExecutions(prev => {
-                          const currentMessageId = 'current'; // We'll use current message since we don't have specific message ID yet
-                          const currentTools = prev.get(currentMessageId) || [];
-                          
-                          // Update existing tool or add new one
-                          const existingIndex = currentTools.findIndex(t => t.id === toolData.id);
-                          let updatedTools: ToolExecution[];
-                          
-                          if (existingIndex >= 0) {
-                            updatedTools = [...currentTools];
-                            updatedTools[existingIndex] = toolData;
-                          } else {
-                            updatedTools = [...currentTools, toolData];
-                          }
-                          
-                          const newMap = new Map(prev);
-                          newMap.set(currentMessageId, updatedTools);
-                          
-                          // Save to localStorage (for 'current' we don't save yet, wait for message completion)
-                          if (currentMessageId !== 'current') {
-                            saveToolExecutionsToStorage(currentMessageId, updatedTools);
-                          }
-                          
-                          return newMap;
-                        });
-                      }
-                    } catch (e) {
-                      // Skip malformed JSON
-                    }
-                  }
-                }
-              }
-            } catch (e) {
-              console.log('Error reading metadata from stream:', e);
-            }
-          }, 0);
-        }
-        
-        return response;
-      };
-      
-      return () => {
-        window.fetch = originalFetch;
-      };
-    }
-  }, [conversationId]);
-
-  // Reset conversation when messages are cleared (new conversation)
-  // BUT NOT on initial page load when messages naturally start empty
-  React.useEffect(() => {
-    if (messages.length === 0 && isHydrated && conversationId) {
-      // Only clear if we previously had a conversation (not on initial load)
-      console.log("Conversation reset - clearing conversation ID because messages were cleared");
-      setConversationId(undefined);
-      conversationIdRef.current = undefined;
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem(CONVERSATION_ID_KEY);
-      }
-    }
-  }, [messages.length, isHydrated, conversationId]);
+  const messagesRef = React.useRef<HTMLDivElement | null>(null)
 
   React.useEffect(() => {
-    const el = messagesRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [messages]);
-
-  // Click-outside functionality for attachment menu
-  React.useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      const clickedElement = event.target as Node;
-      const isInsideTopMenu = attachMenuRef.current && attachMenuRef.current.contains(clickedElement);
-      const isInsideBottomMenu = attachMenuBottomRef.current && attachMenuBottomRef.current.contains(clickedElement);
-      
-      if (!isInsideTopMenu && !isInsideBottomMenu) {
-        setShowAttachMenu(false);
-      }
-    }
-
-    if (showAttachMenu) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => {
-        document.removeEventListener('mousedown', handleClickOutside);
-      };
-    }
-  }, [showAttachMenu]);
-
-  // 监听messages变化来停止发送状态（仅在收到首个文本增量后再隐藏加载气泡）
-  React.useEffect(() => {
-    const lastMessage = messages[messages.length - 1];
-    if (!lastMessage || !sending) return;
-    if (lastMessage.role === 'assistant') {
-      const hasNonEmptyText = Array.isArray((lastMessage as any).parts)
-        && (lastMessage as any).parts.some((p: any) => p.type === 'text' && typeof p.text === 'string' && p.text.length > 0);
-      if (hasNonEmptyText) {
-        console.log('AI text started streaming, stopping loading indicator');
-        setSending(false);
-        if (sendingTimeoutRef.current) {
-          clearTimeout(sendingTimeoutRef.current);
-          sendingTimeoutRef.current = null;
-        }
-      }
-    }
-  }, [messages, sending]);
-
-  // Monitor for completed messages and move 'current' tools to message ID
-  React.useEffect(() => {
-    const lastMessage = messages[messages.length - 1];
-    if (!lastMessage || lastMessage.role !== 'assistant') return;
-    
-    // Check if this is a completed assistant message (has text content and not currently generating)
-    const hasTextContent = Array.isArray((lastMessage as any).parts) && 
-      (lastMessage as any).parts.some((p: any) => p.type === 'text' && typeof p.text === 'string' && p.text.length > 0);
-      
-    if (hasTextContent && !isGenerating && !sending) {
-      // Check if we have 'current' tools that need to be moved to this message
-      const currentTools = toolExecutions.get('current');
-      if (currentTools && currentTools.length > 0) {
-        console.log('🔄 Moving tools from current to completed message:', lastMessage.id);
-        setToolExecutions(prev => {
-          const newMap = new Map(prev);
-          newMap.set(lastMessage.id, currentTools);
-          newMap.delete('current');
-          
-          // Save to localStorage
-          saveToolExecutionsToStorage(lastMessage.id, currentTools);
-          console.log('💾 Saved tools for completed message:', lastMessage.id);
-          
-          return newMap;
-        });
-      }
-    }
-  }, [messages, isGenerating, sending, toolExecutions, saveToolExecutionsToStorage]);
+    const el = messagesRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
+  }, [messages])
 
   const onFilesSelected = React.useCallback(async (list: FileList | null) => {
-    if (!list || list.length === 0) return;
-    const newItems: AttachmentPreview[] = [];
+    if (!list || list.length === 0) return
+    const newItems: AttachmentPreview[] = []
     for (let i = 0; i < list.length; i++) {
-      const f = list.item(i)!;
-      // Use a simple UUID fallback for better browser compatibility
-      const generateId = () => {
-        try {
-          return crypto.randomUUID();
-        } catch {
-          // Fallback for browsers that don't support crypto.randomUUID
-          return `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
-        }
-      };
-      const id = `${f.name}-${f.size}-${f.lastModified}-${generateId()}`;
+      const f = list.item(i)!
+      const id = `${f.name}-${f.size}-${f.lastModified}-${crypto.randomUUID()}`
       const item: AttachmentPreview = {
         id,
         name: f.name,
         size: f.size,
         type: f.type || "application/octet-stream",
-        originalFile: f, // Store the original file
-      };
+      }
 
       if (f.type.startsWith("image/")) {
-        item.url = URL.createObjectURL(f);
-      } else if (
-        f.type.startsWith("text/") ||
-        f.type.includes("json") ||
-        f.type.includes("csv")
-      ) {
-        const text = await f.text();
-        item.textSample = text.slice(0, 1000);
+        item.url = URL.createObjectURL(f)
+      } else if (f.type.startsWith("text/") || f.type.includes("json") || f.type.includes("csv")) {
+        const text = await f.text()
+        item.textSample = text.slice(0, 1000)
       }
 
-      newItems.push(item);
+      newItems.push(item)
     }
-    setFiles((prev) => [...prev, ...newItems]);
-    setShowAttachMenu(false);
-  }, []);
-
-  const onUrlAdd = React.useCallback(async () => {
-    if (!urlInput.trim()) return;
-    
-    try {
-      const url = urlInput.trim();
-      // Basic URL validation
-      new URL(url);
-      
-      // Determine file type from URL extension
-      const urlObj = new URL(url);
-      const pathname = urlObj.pathname.toLowerCase();
-      let fileType = 'custom';
-      let displayType = 'application/octet-stream';
-      
-      if (pathname.match(/\.(jpg|jpeg|png|gif|webp|svg)$/)) {
-        fileType = 'image';
-        displayType = 'image/*';
-      } else if (pathname.match(/\.(txt|md|pdf|html|xlsx|docx|csv|xml|epub|pptx)$/)) {
-        fileType = 'document';
-        displayType = 'text/plain';
-      } else if (pathname.match(/\.(mp3|m4a|wav|webm|amr)$/)) {
-        fileType = 'audio';
-        displayType = 'audio/*';
-      } else if (pathname.match(/\.(mp4|mov|mpeg|mpga)$/)) {
-        fileType = 'video';
-        displayType = 'video/*';
-      }
-
-      const filename = pathname.split('/').pop() || 'file-from-url';
-      
-      // Use a simple UUID fallback for better browser compatibility
-      const generateId = () => {
-        try {
-          return crypto.randomUUID();
-        } catch {
-          // Fallback for browsers that don't support crypto.randomUUID
-          return `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
-        }
-      };
-
-      const urlFile: AttachmentPreview = {
-        id: `url-${Date.now()}-${generateId()}`,
-        name: filename,
-        size: 0, // Unknown size for URL files
-        type: displayType,
-        url: fileType === 'image' ? url : undefined, // Show preview for images
-        isUrl: true,
-        fileUrl: url,
-        difyFileType: fileType,
-      };
-
-      setFiles((prev) => [...prev, urlFile]);
-      setUrlInput("");
-      setShowUrlInput(false);
-      setShowAttachMenu(false);
-    } catch (error) {
-      setConnectionError("Please enter a valid URL");
-    }
-  }, [urlInput]);
+    setFiles((prev) => [...prev, ...newItems])
+  }, [])
 
   const onDrop = React.useCallback(
     async (e: React.DragEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      setDrag("idle");
-      const dt = e.dataTransfer;
-      await onFilesSelected(dt.files);
+      e.preventDefault()
+      setDrag("idle")
+      const dt = e.dataTransfer
+      await onFilesSelected(dt.files)
     },
-    [onFilesSelected]
-  );
+    [onFilesSelected],
+  )
 
   const onSend = React.useCallback(async () => {
-    // Check wallet connection first
-    if (!walletAddress) {
-      alert("Please connect your wallet first to use chat functionality");
-      return;
-    }
+    if (!input.trim() && files.length === 0) return
 
-    if (!input.trim() && files.length === 0) return;
-
-    // Store input and files before clearing them
-    const messageText = input;
-    const messageFiles = [...files];
-    
-    // Clear input and files immediately (but keep object URLs alive for previews)
-    setInput("");
-    setFiles([]);
-
-    setSending(true);
-    setConnectionError(null); // Clear any previous errors
-    setIsGenerating(false); // Reset generation state for new message
-    setCurrentTaskId(null);
-    setIsNewConversation(false); // Reset new conversation flag when sending message
-    
-    // Clear any existing timeout
-    if (sendingTimeoutRef.current) {
-      clearTimeout(sendingTimeoutRef.current);
-    }
-    
-    // Set a timeout to reset sending state if no response after 90 seconds
-    sendingTimeoutRef.current = setTimeout(() => {
-      // Use a ref or check current state to avoid closure issues
-      console.log('Message sending timeout, resetting state');
-      setSending(false);
-      setIsGenerating(false);
-      setCurrentTaskId(null);
-      setConnectionError('Request timed out. The AI service may be experiencing issues. Please try again.');
-      
-      // Update any running tool executions to error state due to timeout
-      setToolExecutions(prev => {
-        const currentTools = prev.get('current') || [];
-        if (currentTools.length > 0) {
-          console.log('🔧 Marking running tools as failed due to timeout');
-          const updatedTools = currentTools.map(tool => {
-            if (tool.status === 'start') {
-              return { ...tool, status: 'error' as const, label: `${tool.label} (Timeout)` };
-            }
-            return tool;
-          });
-          const newMap = new Map(prev);
-          newMap.set('current', updatedTools);
-          return newMap;
-        }
-        return prev;
-      });
-      
-      sendingTimeoutRef.current = null;
-    }, 90000);
-    
-    try {
-      const currentConversationId = conversationIdRef.current;
-      
-      console.log("Sending message with conversation ID:", currentConversationId);
-      console.log("Message files:", messageFiles);
-
-      // Process files (both local uploads and URLs)
-      let uploadedFiles: any[] = [];
-      if (messageFiles.length > 0) {
-        for (const file of messageFiles) {
-          try {
-            if (file.isUrl && file.fileUrl) {
-              // Validate URL format
-              try {
-                new URL(file.fileUrl); // This will throw if URL is invalid
-                
-                // Handle URL files
-                uploadedFiles.push({
-                  type: file.difyFileType || 'custom',
-                  transfer_method: 'remote_url',
-                  url: file.fileUrl
-                });
-                
-                console.log('URL file added:', {
-                  fileName: file.name,
-                  url: file.fileUrl,
-                  type: file.difyFileType || 'custom'
-                });
-              } catch (urlError) {
-                console.error('Invalid URL format for file:', file.name, 'URL:', file.fileUrl);
-              }
-            } else if (file.originalFile) {
-              // Handle local file uploads
-              const formData = new FormData();
-              formData.append('file', file.originalFile);
-              formData.append('user', walletAddress);
-
-              const uploadResponse = await fetch('/api/upload', {
-                method: 'POST',
-                body: formData,
-              });
-
-              if (uploadResponse.ok) {
-                const uploadResult = await uploadResponse.json();
-                
-                // Validate Dify file upload response
-                if (!uploadResult || typeof uploadResult !== 'object') {
-                  console.error('Invalid upload response format for:', file.name);
-                  continue;
-                }
-
-                // Check if the response has the expected Dify file structure
-                if (!uploadResult.id) {
-                  console.error('Upload response missing file ID for:', file.name, uploadResult);
-                  continue;
-                }
-
-                // Log the file information received from Dify for debugging
-                console.log('File upload successful:', {
-                  fileName: file.name,
-                  difyResponse: uploadResult
-                });
-                
-                // Determine file type based on MIME type
-                let fileType = 'custom';
-                if (file.type.startsWith('image/')) {
-                  fileType = 'image';
-                } else if (
-                  file.type.startsWith('text/') || 
-                  file.type.includes('json') || 
-                  file.type.includes('csv') ||
-                  file.type.includes('pdf') ||
-                  file.type.includes('document') ||
-                  file.type.includes('spreadsheet') ||
-                  file.type.includes('xlsx') ||
-                  file.type.includes('docx') ||
-                  file.type.includes('pptx') ||
-                  file.type.includes('html') ||
-                  file.type.includes('xml') ||
-                  file.type.includes('epub') ||
-                  file.name.match(/\.(txt|md|pdf|html|xlsx|docx|csv|xml|epub|pptx)$/i)
-                ) {
-                  fileType = 'document';
-                } else if (file.type.startsWith('audio/')) {
-                  fileType = 'audio';
-                } else if (file.type.startsWith('video/')) {
-                  fileType = 'video';
-                }
-                
-                // Validate the file ID format (Dify typically returns UUIDs)
-                const fileId = uploadResult.id;
-                if (typeof fileId !== 'string' || fileId.length === 0) {
-                  console.error('Invalid file ID format from Dify:', fileId, 'for file:', file.name);
-                  continue;
-                }
-                
-                uploadedFiles.push({
-                  type: fileType,
-                  transfer_method: 'local_file',
-                  upload_file_id: fileId
-                });
-              } else {
-                const errorText = await uploadResponse.text().catch(() => 'Unknown error');
-                console.error('File upload failed for:', file.name, 'Status:', uploadResponse.status, 'Error:', errorText);
-              }
-            } else {
-              console.warn('File has no originalFile or URL, skipping:', file.name);
-            }
-          } catch (error) {
-            console.error('Error processing file:', file.name, error);
-          }
-        }
-      }
-
-      // Final validation of uploaded files
-      const validUploadedFiles = uploadedFiles.filter(file => {
-        // Validate file structure
-        if (!file || typeof file !== 'object') {
-          console.warn('Invalid file object:', file);
-          return false;
-        }
-        
-        // Check required fields
-        if (!file.type || !file.transfer_method) {
-          console.warn('File missing required fields:', file);
-          return false;
-        }
-        
-        // Validate transfer method specific requirements
-        if (file.transfer_method === 'local_file' && !file.upload_file_id) {
-          console.warn('Local file missing upload_file_id:', file);
-          return false;
-        }
-        
-        if (file.transfer_method === 'remote_url' && !file.url) {
-          console.warn('Remote file missing URL:', file);
-          return false;
-        }
-        
-        return true;
-      });
-
-      if (validUploadedFiles.length !== uploadedFiles.length) {
-        console.warn(`Filtered out ${uploadedFiles.length - validUploadedFiles.length} invalid file(s)`);
-        uploadedFiles = validUploadedFiles;
-      }
-
-      console.log('Final validated files for Dify:', uploadedFiles);
-
-      // Show user feedback if some files failed to upload
-      if (messageFiles.length > 0 && uploadedFiles.length < messageFiles.length) {
-        const failedCount = messageFiles.length - uploadedFiles.length;
-        setConnectionError(`Warning: ${failedCount} file(s) failed to upload and will only be included as text summary.`);
-      }
-
-      // Include file summary for files that couldn't be uploaded
-      const attachmentSummary = messageFiles.length > uploadedFiles.length
-        ? "\n\n[File Attachments]\n" +
-          messageFiles
-            .filter((_, idx) => idx >= uploadedFiles.length)
+    // Include a simple attachment summary into the user message:
+    const attachmentSummary =
+      files.length > 0
+        ? "\n\n[Attachments]\n" +
+          files
             .map((f, idx) => {
-              const base = `${idx + 1}. ${f.name} (${Math.ceil(f.size / 1024)} KB, ${f.type || "unknown"})`;
-              const snippet = f.textSample ? `\n---\n${f.textSample}\n---\n` : "";
-              return base + (snippet ? `\n${snippet}` : "");
+              const base = `${idx + 1}. ${f.name} (${Math.ceil(f.size / 1024)} KB, ${f.type || "unknown"})`
+              const snippet = f.textSample ? `\n---\n${f.textSample}\n---\n` : ""
+              return base + (snippet ? `\n${snippet}` : "")
             })
             .join("\n")
-        : "";
+        : ""
 
-      // Build client-side attachment previews for this message
-      const clientAttachments: BubbleAttachment[] = messageFiles.map((f) => ({
-        id: f.id,
-        name: f.name,
-        size: f.size,
-        type: f.type,
-        url: f.isUrl ? f.fileUrl : undefined,
-        previewUrl: f.type.startsWith('image/') ? f.url : (f.isUrl && (f.url || '').length ? f.url : undefined),
-      }));
+    // Get the current wallet address from localStorage
+    const currentWalletAddress = localStorage.getItem(STORAGE_KEY)
 
-      // Send message with uploaded files and client-side preview metadata
+    setSending(true)
+    try {
+      // Generative UI Chatbot expects structured parts. The simplest is a single text part:
       await sendMessage({
-        parts: [{ type: "text", text: messageText + attachmentSummary }],
-        ...(currentConversationId || walletAddress || uploadedFiles.length > 0 ? {
-          data: { 
-            ...(walletAddress && { walletAddress: walletAddress }),
-            ...(currentConversationId && { conversationId: currentConversationId }),
-            ...(uploadedFiles.length > 0 && { files: uploadedFiles }),
-            ...(clientAttachments.length > 0 && { clientAttachments })
-          } as any
-        } : {})
-      });
-
-      // Schedule cleanup of any temporary object URLs used for previews
-      try {
-        messageFiles.forEach((f) => {
-          if (!f.isUrl && f.url) {
-            setTimeout(() => {
-              try { URL.revokeObjectURL(f.url!); } catch {}
-            }, 60000);
-          }
-        });
-      } catch {}
-      
-      // Clear timeout on successful send
-      if (sendingTimeoutRef.current) {
-        clearTimeout(sendingTimeoutRef.current);
-        sendingTimeoutRef.current = null;
-      }
-    } catch (error) {
-      console.error('Error sending message:', error);
-      setConnectionError('Failed to send message. Please check your connection and try again.');
-      setSending(false);
-      if (sendingTimeoutRef.current) {
-        clearTimeout(sendingTimeoutRef.current);
-        sendingTimeoutRef.current = null;
-      }
+        parts: [{ type: "text", text: input + attachmentSummary }],
+        // Add walletAddress to the data property of the user message
+        data: { walletAddress: currentWalletAddress },
+      })
+      setInput("")
+      files.forEach((f) => f.url && URL.revokeObjectURL(f.url))
+      setFiles([])
+    } finally {
+      setSending(false)
     }
-  }, [input, files, sendMessage, walletAddress]);
+  }, [files, input, sendMessage])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      onSend();
+      e.preventDefault()
+      onSend()
     }
-  };
-
-  const handleStopGeneration = React.useCallback(async () => {
-    if (!currentTaskId || !walletAddress) return;
-
-    try {
-      console.log('Stopping generation for task:', currentTaskId);
-      
-      const response = await fetch('/api/stop', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          task_id: currentTaskId,
-          user: walletAddress,
-        }),
-      });
-
-      if (response.ok) {
-        console.log('Generation stopped successfully');
-        setIsGenerating(false);
-        setCurrentTaskId(null);
-        setSending(false);
-        // Mark any current running tools as interrupted for UI clarity
-        setToolExecutions(prev => {
-          const newMap = new Map(prev);
-          const currentTools = newMap.get('current');
-          if (currentTools && currentTools.length > 0) {
-            const interrupted = currentTools.map(t => (
-              t.status === 'start' ? { ...t, status: 'error' as const, label: `${t.label} (Interrupted)` } : t
-            ));
-            newMap.set('current', interrupted);
-          }
-          return newMap;
-        });
-      } else {
-        console.error('Failed to stop generation:', response.status);
-        setConnectionError('Failed to stop generation. Please try again.');
-      }
-    } catch (error) {
-      console.error('Error stopping generation:', error);
-      setConnectionError('Error stopping generation. Please check your connection.');
-    }
-  }, [currentTaskId, walletAddress]);
+  }
 
   return (
-    <main className="h-dvh bg-neutral-50 flex flex-col">
-      <div className="flex flex-1 overflow-hidden"> {/* Full height container for sidebar and main content */}
-        <Sidebar 
-          onSelectTab={setActiveMainTab} 
-          activeTab={activeMainTab}
-          currentConversationId={currentConversationId}
-          onSelectConversation={handleSelectConversation}
-          onNewConversation={handleNewConversation}
-          onDeleteConversation={handleDeleteConversation}
-          onRenameConversation={handleRenameConversation}
-          refreshTrigger={conversationRefreshTrigger}
-          isHydrated={isHydrated}
-        /> {/* Render the new Sidebar component */}
+    <main className="min-h-dvh bg-neutral-50 flex flex-col">
+      <header className="w-full border-b"></header>
+
+      <div className="flex flex-1 overflow-hidden">
+        <Sidebar onSelectTab={setActiveMainTab} activeTab={activeMainTab} />
 
         {/* Main content area */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {isUnifiedLoading ? (
-            // Unified loading screen for hydration and conversation history
-            <div className="flex-1 flex flex-col items-center justify-center p-6">
-              <div className="relative mb-6">
-                <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-emerald-100 to-emerald-200 flex items-center justify-center shadow-inner">
-                  <div className="h-6 w-6 border-2 border-emerald-600/80 border-t-transparent rounded-full animate-spin"></div>
-                </div>
-                <div className="absolute -top-1 -right-1 h-2.5 w-2.5 bg-emerald-500 rounded-full animate-pulse" />
-              </div>
-              <p className="text-sm text-gray-600">{unifiedLoader.title}</p>
-              <p className="text-xs text-gray-400 mt-2">{unifiedLoader.subtitle}</p>
+        <div className="flex-1 flex flex-col">
+          {activeMainTab === "dashboard" && (
+            <div className="flex-1 flex flex-col">
+              <Dashboard />
             </div>
-          ) : !walletAddress ? (
-            // Wallet connection required screen (minimalist welcome)
-            <div className="flex-1 flex items-center justify-center p-6">
-              <div className="w-full max-w-xl text-center mx-auto">
-                <div className="mx-auto mb-8 h-16 w-16 rounded-2xl bg-gradient-to-br from-emerald-500/15 to-emerald-600/10 border border-emerald-200/40 flex items-center justify-center shadow-sm">
-                  <Sparkles className="h-7 w-7 text-emerald-600" />
-                </div>
-                <h1 className="text-3xl font-semibold tracking-tight mb-3 text-gray-900">
-                  <span className="bg-gradient-to-r from-emerald-600 to-emerald-700 bg-clip-text text-transparent">Welcome to Darwin</span>
-                </h1>
-                <p className="text-gray-600 mb-6 leading-relaxed max-w-prose mx-auto">
-                  An AI‑powered multi‑agent system for autonomous e‑commerce operations.
-                  Connect your wallet to begin.
-                </p>
-                <div className="rounded-2xl border border-gray-200/60 bg-white/70 backdrop-blur-sm shadow-sm p-5">
-                  <div className="flex flex-col items-center gap-3 text-center">
-                    <div className="text-sm text-gray-600">
-                      <div className="mb-2 font-medium text-gray-800">Supported wallets</div>
-                      <div className="flex flex-wrap justify-center gap-2">
-                        <span className="px-2.5 py-1 rounded-md bg-gray-100 text-gray-700 text-xs">MetaMask</span>
-                        <span className="px-2.5 py-1 rounded-md bg-gray-100 text-gray-700 text-xs">OKX Wallet</span>
-                        <span className="px-2.5 py-1 rounded-md bg-gray-100 text-gray-700 text-xs">Blocto</span>
-                    </div>
-                  </div>
-                    <div className="text-xs text-gray-500">
-                      Use the "Connect Wallet" button in the left sidebar to continue.
-                </div>
-              </div>
-            </div>
-                <div className="mt-4 text-xs text-gray-500 text-center">
-                  By connecting, you agree to a secure, wallet‑bound session. No custodial access.
-                </div>
-              </div>
-            </div>
-          ) : (
-            // Main content based on selected tab
-            <>
-              {activeMainTab === 'chat' && (
-                <div className="flex-1 flex flex-col min-h-0">
-                <div
-                  ref={messagesRef}
-                    className="flex-1 min-h-0 overflow-y-auto"
-                >
-                    <div className="px-6 py-8 mx-auto max-w-4xl w-full">
-                    
-                  {/* Unified loader already shown above; avoid second loader here */}
-                  {/* Empty-state like ChatGPT: input centered until first message */}
-                   {(() => {
-                     const shouldShowWelcome = !isLoadingHistory && !isInitialLoading && messages.length === 0;
-                     console.log('🔄 WELCOME SCREEN CHECK:', {
-                       shouldShowWelcome,
-                       isLoadingHistory,
-                       isInitialLoading,
-                       messagesLength: messages.length,
-                       conversationId,
-                       currentConversationId,
-                       isNewConversation
-                     });
-                     return shouldShowWelcome;
-                   })() ? (
-                        <div className="h-full w-full flex items-center justify-center min-h-[60vh]">
-                      <div className="max-w-3xl w-full">
-                            <div className="text-center mb-8">
-                              <div className="w-16 h-16 mx-auto mb-6 rounded-full bg-emerald-100 flex items-center justify-center">
-                                <Sparkles className="w-8 h-8 text-emerald-600" />
-                              </div>
-                              <h1 className="text-3xl font-semibold mb-3">{"Welcome to Darwin"}</h1>
-                              <p className="text-gray-600 text-lg leading-relaxed mb-2">
-                                {'A Multi-Agent AI System for Autonomous E-commerce Operations'}
-                              </p>
-                              <p className="text-sm text-gray-500">
-                                {'Drag & drop product files here or type your message below. Press Ctrl/⌘ + Enter to send.'}
-                          </p>
-                        </div>
-                        <div
-                          className={cn(
-                            "rounded-2xl border relative transition-all duration-300 shadow-lg hover:shadow-xl",
-                            "bg-gradient-to-br from-white via-white to-gray-50/30 backdrop-blur-sm",
-                            drag === "over" 
-                              ? "border-emerald-400 bg-gradient-to-br from-emerald-50 to-emerald-100/50 shadow-emerald-200/50 scale-[1.02]" 
-                              : "border-gray-200/60 hover:border-emerald-300/50"
-                          )}
-                          onDragEnter={(e) => {
-                            e.preventDefault();
-                            setDrag("over");
-                          }}
-                          onDragOver={(e) => {
-                            e.preventDefault();
-                            setDrag("over");
-                          }}
-                          onDragLeave={(e) => {
-                            e.preventDefault();
-                            setDrag("idle");
-                          }}
-                          onDrop={onDrop}
-                        >
-                          <div className="p-5 sm:p-6">
-                            <Textarea
-                              value={input}
-                              onChange={(e) => setInput(e.target.value)}
-                              onKeyDown={handleKeyDown}
-                              placeholder="Describe your ideal shop or business plan, upload your product files—Darwin will take it from there."
-                              className={cn(
-                                "min-h-[120px] resize-y border-0 bg-transparent text-gray-800 placeholder:text-gray-500",
-                                "focus:ring-0 focus:outline-none text-base leading-relaxed",
-                                "transition-all duration-200"
-                              )}
-                            />
-                            <div className="flex items-center justify-between mt-4">
-                                  <div className="relative" ref={attachMenuRef}>
-                              <Button
-                                variant="ghost"
-                                aria-label="Attach"
-                                      className={cn(
-                                        "h-12 w-12 p-0 rounded-xl transition-all duration-200 border shadow-sm",
-                                        "bg-gradient-to-br from-white to-gray-50/80 border-gray-200/60",
-                                        "hover:from-emerald-50 hover:to-emerald-100/50 hover:border-emerald-300/60 hover:shadow-md hover:scale-105",
-                                        "active:scale-95 backdrop-blur-sm flex items-center justify-center"
-                                      )}
-                                      onClick={() => setShowAttachMenu(!showAttachMenu)}
-                                    >
-                                      <Paperclip className="h-5 w-5 text-gray-600 hover:text-emerald-700 transition-colors" />
-                                    </Button>
-                                    {showAttachMenu && (
-                                      <div className="absolute bottom-full left-0 sm:left-0 mb-3 bg-white/95 backdrop-blur-md border border-gray-200/60 rounded-xl shadow-xl py-3 w-[220px] sm:min-w-[220px] z-50 animate-in slide-in-from-bottom-2 duration-200 -translate-x-1/2 sm:translate-x-0 overflow-hidden">
-                                        <button
-                                          className="flex items-center gap-3 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gradient-to-r hover:from-blue-50 hover:to-blue-100/50 transition-all duration-200"
-                                          onClick={() => {
-                                            document.getElementById('file-input-top')?.click();
-                                            setShowAttachMenu(false);
-                                          }}
-                                        >
-                                          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-100 to-blue-200/50 flex items-center justify-center shadow-sm">
-                                            <span className="text-lg">📁</span>
-                                          </div>
-                                          <div className="text-left">
-                                            <div className="font-medium text-gray-800">Upload files</div>
-                                            <div className="text-xs text-gray-500">Choose files from your device</div>
-                                          </div>
-                                        </button>
-                                        <button
-                                          className="flex items-center gap-3 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gradient-to-r hover:from-green-50 hover:to-green-100/50 transition-all duration-200"
-                                          onClick={() => {
-                                            setShowUrlInput(true);
-                                            setShowAttachMenu(false);
-                                          }}
-                                        >
-                                          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-green-100 to-green-200/50 flex items-center justify-center shadow-sm">
-                                            <span className="text-lg">🔗</span>
-                                          </div>
-                                          <div className="text-left">
-                                            <div className="font-medium text-gray-800">Add from URL</div>
-                                            <div className="text-xs text-gray-500">Link to file or image online</div>
-                                          </div>
-                                        </button>
-                                      </div>
-                                    )}
-                                <input
-                                      id="file-input-top"
-                                  type="file"
-                                  multiple
-                                  className="hidden"
-                                  onChange={(e) => onFilesSelected(e.target.files)}
-                                />
-                                  </div>
-                                  {isGenerating && currentTaskId ? (
-                                    <Button
-                                      onClick={handleStopGeneration}
-                                      variant="outline"
-                                      aria-label="Stop generation"
-                                      title="Stop generation (Esc)"
-                                      className={cn(
-                                        "h-12 w-12 p-0 rounded-xl transition-all duration-200 border shadow-sm",
-                                        "bg-gradient-to-br from-red-50 to-red-100/60 border-red-200/70 text-red-600",
-                                        "hover:from-red-100 hover:to-red-200/60 hover:border-red-300/70 hover:text-red-700 hover:shadow-md hover:scale-105",
-                                        "active:scale-95 flex items-center justify-center relative"
-                                      )}
-                                    >
-                                      <div className="relative">
-                                        <Square className="h-5 w-5" />
-                                        <span className="absolute -top-0.5 -right-0.5 h-2 w-2 bg-red-500 rounded-full animate-pulse" />
-                                      </div>
-                                    </Button>
-                                  ) : (
-                              <Button
-                                onClick={onSend}
-                                disabled={sending || (!input.trim() && files.length === 0)}
-                                aria-label="Send"
-                                className={cn(
-                                  "h-12 w-12 p-0 rounded-xl transition-all duration-200 shadow-md",
-                                  "bg-gradient-to-br from-emerald-500 to-emerald-600 text-white border-0",
-                                  "hover:from-emerald-600 hover:to-emerald-700 hover:shadow-lg hover:scale-105",
-                                  "active:scale-95 disabled:from-gray-300 disabled:to-gray-400 disabled:shadow-sm disabled:scale-100",
-                                  "flex items-center justify-center"
-                                )}
-                              >
-                                {sending ? (
-                                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                ) : (
-                                  <Send className="h-5 w-5" />
-                                )}
-                              </Button>
-                                  )}
-                            </div>
-                                {showUrlInput && (
-                                  <div className="mt-4 p-4 bg-gradient-to-r from-gray-50 to-gray-100/50 rounded-xl border border-gray-200/60 animate-in slide-in-from-top-2 duration-200">
-                                    <div className="flex gap-3">
-                                      <input
-                                        type="url"
-                                        value={urlInput}
-                                        onChange={(e) => setUrlInput(e.target.value)}
-                                        placeholder="Enter file URL (e.g., https://example.com/image.jpg)"
-                                        className={cn(
-                                          "flex-1 px-4 py-3 bg-white border border-gray-200/60 rounded-xl text-sm",
-                                          "focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300",
-                                          "placeholder:text-gray-400 transition-all duration-200 shadow-sm"
-                                        )}
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter') onUrlAdd();
-                                          if (e.key === 'Escape') {
-                                            setShowUrlInput(false);
-                                            setUrlInput("");
-                                          }
-                                        }}
-                                        autoFocus
-                                      />
-                                      <Button
-                                        onClick={onUrlAdd}
-                                        size="sm"
-                                        disabled={!urlInput.trim()}
-                                        className="px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 transition-all duration-200 shadow-sm hover:shadow-md hover:scale-105 active:scale-95"
-                                      >
-                                        <span className="flex items-center gap-1">
-                                          <span>Add</span>
-                                          <span className="text-xs opacity-75">✓</span>
-                                        </span>
-                                      </Button>
-                                      <Button
-                                        onClick={() => {
-                                          setShowUrlInput(false);
-                                          setUrlInput("");
-                                        }}
-                                        size="sm"
-                                        variant="outline"
-                                        className="px-4 rounded-xl border-gray-300 hover:bg-gray-50 transition-all duration-200 hover:scale-105 active:scale-95"
-                                      >
-                                        <span className="flex items-center gap-1">
-                                          <span>Cancel</span>
-                                          <span className="text-xs opacity-75">✕</span>
-                                        </span>
-                                      </Button>
-                                    </div>
-                                  </div>
-                                )}
-                            <AttachmentChips
-                              items={files}
-                              onRemove={(id) =>
-                                setFiles((prev) => prev.filter((f) => f.id !== id))
-                              }
-                            />
-                            {sending && (
-                              <div className="mt-4">
-                                <MessageBubble role="system">
-                                  <div className="flex items-center gap-3">
-                                    <div className="flex space-x-1 items-center">
-                                      <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce" style={{animationDelay: '-0.3s'}}></div>
-                                      <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce" style={{animationDelay: '-0.15s'}}></div>
-                                      <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce"></div>
-                                    </div>
-                                    <span className="text-sm text-muted-foreground animate-pulse">
-                                      Darwin is thinking...
-                                    </span>
-                                  </div>
-                                </MessageBubble>
-                              </div>
+          )}
+
+          {activeMainTab === "chat" && (
+            <div className="flex-1 flex flex-col">
+              {/* Chat content */}
+              <div className="flex-1 mx-auto w-full max-w-5xl grid grid-rows-[1fr_auto] gap-4 px-0">
+                <div className="row-start-1 overflow-hidden">
+                  <div ref={messagesRef} className="h-full overflow-y-auto p-4 sm:p-6">
+                    {/* Empty-state like ChatGPT: input centered until first message */}
+                    {messages.length === 0 ? (
+                      <div className="h-full w-full flex items-center justify-center">
+                        <div className="max-w-3xl w-full">
+                          <div className="text-center mb-6">
+                            <h1 className="text-2xl font-semibold">{"Agent Chat Center"}</h1>
+                            <p className="text-sm text-muted-foreground mt-1">
+                              {"Real-time conversation with Agents. Choose single or multi-agent interactions."}
+                              <br />
+                              {"Support task instructions and feedback viewing. Drag & drop files here to start."}
+                            </p>
+                          </div>
+                          <div
+                            className={cn(
+                              "rounded-xl border relative",
+                              drag === "over" ? "border-emerald-500 bg-emerald-50" : "border-muted",
                             )}
+                            onDragEnter={(e) => {
+                              e.preventDefault()
+                              setDrag("over")
+                            }}
+                            onDragOver={(e) => {
+                              e.preventDefault()
+                              setDrag("over")
+                            }}
+                            onDragLeave={(e) => {
+                              e.preventDefault()
+                              setDrag("idle")
+                            }}
+                            onDrop={onDrop}
+                          >
+                            <div className="p-4 sm:p-5">
+                              <Textarea
+                                value={input}
+                                onChange={(e) => setInput(e.target.value)}
+                                onKeyDown={handleKeyDown}
+                                placeholder="Describe your ideal shop or business plan, upload your product files—Darwin will take it from there."
+                                className="min-h-[120px] resize-y"
+                              />
+                              <div className="flex items-center justify-between mt-3">
+                                <Button
+                                  variant="ghost"
+                                  className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer px-2 py-2 rounded-md hover:bg-muted"
+                                  onClick={() => document.getElementById("file-input-top")?.click()}
+                                >
+                                  <input
+                                    id="file-input-top"
+                                    type="file"
+                                    multiple
+                                    className="hidden"
+                                    onChange={(e) => onFilesSelected(e.target.files)}
+                                  />
+                                  <Paperclip className="h-4 w-4" />
+                                  {"Add attachments"}
+                                </Button>
+                                <Button onClick={onSend} disabled={sending || (!input.trim() && files.length === 0)}>
+                                  <Send className="h-4 w-4 mr-2" />
+                                  {sending ? "Sending…" : "Send"}
+                                </Button>
+                              </div>
+                              <AttachmentChips
+                                items={files}
+                                onRemove={(id) => setFiles((prev) => prev.filter((f) => f.id !== id))}
+                              />
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  ) : !isLoadingHistory ? (
-                    // Generative UI Chatbot rendering of message parts:
-                        <div className="flex flex-col gap-6 pb-8">
-                      {messages.map((m) => {
-                        // Get tools for this message - check both message ID and 'current' for active streaming
-                        const messageTools = toolExecutions.get(m.id) || [];
-                        const currentTools = toolExecutions.get('current') || [];
-                        const isLastMessage = m === messages[messages.length - 1];
-                        
-                        // For the last message, combine stored tools with current streaming tools
-                        const finalTools = isLastMessage && currentTools.length > 0 ? currentTools : messageTools;
-                        const lookupKey = isLastMessage && currentTools.length > 0 ? 'current' : m.id;
-                        
-                        if (finalTools.length > 0) {
-                          console.log('🎯 Rendering tools for message:', m.id, 'lookup key:', lookupKey, 'tools count:', finalTools.length);
-                          console.log('🎯 Tools:', finalTools.map(t => `${t.label}(${t.status})`));
-                        }
-                        
-                        return (
-                          <MessageBubble key={m.id} role={m.role as any} tools={m.role === 'assistant' ? finalTools : []}>
+                    ) : (
+                      // Generative UI Chatbot rendering of message parts:
+                      <div className="flex flex-col gap-4">
+                        {messages.map((m) => (
+                          <MessageBubble key={m.id} role={m.role as any}>
                             {m.parts.map((part, index) => {
                               switch (part.type) {
                                 case "text":
-                                  return m.role === 'assistant'
-                                    ? <React.Fragment key={index}>{part.text}</React.Fragment>
-                                    : <div key={index}>{part.text}</div>;
+                                  return <Response key={index}>{part.text}</Response>
                                 case "reasoning":
-                                  return <pre key={index}>{part.text}</pre>;
-                              // Example typed tool part rendering (will only appear if server provides tools)
-                              case "tool-askForConfirmation": {
-                                const callId = part.toolCallId;
-                                switch (part.state) {
-                                  case "input-streaming":
-                                    return (
-                                      <div key={callId}>Loading confirmation request...</div>
-                                    );
-                                  case "input-available":
-                                    return (
-                                      <div key={callId}>
-                                        {(part.input as any)?.message}
-                                        <div className="mt-2 flex gap-2">
-                                          <Button
-                                            size="sm"
-                                            variant="secondary"
-                                            onClick={() =>
-                                              addToolResult({
-                                                tool: "askForConfirmation",
-                                                toolCallId: callId,
-                                                output: "Yes, confirmed.",
-                                              })
-                                            }
-                                          >
-                                            Yes
-                                          </Button>
-                                          <Button
-                                            size="sm"
-                                            variant="outline"
-                                            onClick={() =>
-                                              addToolResult({
-                                                tool: "askForConfirmation",
-                                                toolCallId: callId,
-                                                output: "No, denied",
-                                              })
-                                            }
-                                          >
-                                            No
-                                          </Button>
+                                  return <pre key={index}>{part.text}</pre>
+                                // Example typed tool part rendering (will only appear if server provides tools)
+                                case "tool-askForConfirmation": {
+                                  const callId = part.toolCallId
+                                  switch (part.state) {
+                                    case "input-streaming":
+                                      return <div key={callId}>Loading confirmation request...</div>
+                                    case "input-available":
+                                      return (
+                                        <div key={callId}>
+                                          {part.input.message}
+                                          <div className="mt-2 flex gap-2">
+                                            <Button
+                                              size="sm"
+                                              variant="secondary"
+                                              onClick={() =>
+                                                addToolResult({
+                                                  tool: "askForConfirmation",
+                                                  toolCallId: callId,
+                                                  output: "Yes, confirmed.",
+                                                })
+                                              }
+                                            >
+                                              Yes
+                                            </Button>
+                                            <Button
+                                              size="sm"
+                                              variant="outline"
+                                              onClick={() =>
+                                                addToolResult({
+                                                  tool: "askForConfirmation",
+                                                  toolCallId: callId,
+                                                  output: "No, denied.",
+                                                })
+                                              }
+                                            >
+                                              No
+                                            </Button>
+                                          </div>
                                         </div>
-                                      </div>
-                                    );
-                                  case "output-available":
-                                    return (
-                                      <div key={callId}>
-                                        Confirmation result: {String(part.output || '')}
-                                      </div>
-                                    );
-                                  case "output-error":
-                                    return <div key={callId}>Error: {part.errorText}</div>;
-                                }
-                                break;
-                              }
-                              case "tool-getLocation": {
-                                const callId = part.toolCallId;
-                                switch (part.state) {
-                                  case "input-streaming":
-                                    return <div key={callId}>Preparing location request...</div>;
-                                  case "input-available":
-                                    return <div key={callId}>Getting location...</div>;
-                                  case "output-available":
-                                    return <div key={callId}>Location: {String(part.output || '')}</div>;
-                                  case "output-error":
-                                    return <div key={callId}>Error: {part.errorText}</div>;
-                                }
-                                break;
-                              }
-                              default:
-                                return null;
-                            }
-                          })}
-                          {m.role === 'user' && (
-                            <BubbleAttachmentPreview
-                              attachments={(m as any)?.data?.clientAttachments as BubbleAttachment[] | undefined}
-                              isUser
-                            />
-                          )}
-                          </MessageBubble>
-                        );
-                      })}
-                      
-                      {/* Loading indicator when sending message - hide when we have tool executions */}
-                      {sending && !toolExecutions.has('current') && (
-                        <MessageBubble role="system">
-                          <div className="flex items-center gap-3">
-                                <div className="flex space-x-1 items-center">
-                                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce" style={{animationDelay: '-0.3s'}}></div>
-                                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce" style={{animationDelay: '-0.15s'}}></div>
-                              <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce"></div>
-                            </div>
-                                <span className="text-sm text-muted-foreground animate-pulse">
-                                  Darwin is thinking...
-                                </span>
-                          </div>
-                        </MessageBubble>
-                      )}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-
-              {messages.length > 0 && (
-                    <div className="px-6 py-5 border-t border-gray-100/60 bg-gradient-to-t from-white via-white to-gray-50/20 backdrop-blur-sm">
-                      <div
-                        className={cn(
-                          "mx-auto max-w-4xl relative transition-all duration-300",
-                          "bg-gradient-to-br from-white via-white to-gray-50/30 border border-gray-200/60 rounded-2xl shadow-lg hover:shadow-xl backdrop-blur-sm",
-                          "p-5",
-                          drag === "over" && "ring-2 ring-emerald-400/50 border-emerald-300 bg-gradient-to-br from-emerald-50 to-emerald-100/50 scale-[1.01]"
-                        )}
-                  onDragEnter={(e) => {
-                    e.preventDefault();
-                    setDrag("over");
-                  }}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setDrag("over");
-                  }}
-                  onDragLeave={(e) => {
-                    e.preventDefault();
-                    setDrag("idle");
-                  }}
-                  onDrop={onDrop}
-                >
-                      <div className="flex flex-col gap-3">
-                        {connectionError && (
-                          <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-                            <span className="text-red-500">❌</span>
-                            <span>{connectionError}</span>
-                            <button 
-                              onClick={() => setConnectionError(null)}
-                              className="ml-auto text-red-400 hover:text-red-600 transition-colors"
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        )}
-                        <div className="flex items-end gap-4">
-                      <Textarea
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        placeholder="Type a message or drop files here…"
-                            className={cn(
-                              "min-h-[56px] max-h-[160px] resize-y border-0 bg-transparent",
-                              "focus:ring-0 focus:outline-none text-base text-gray-800 placeholder:text-gray-500",
-                              "leading-relaxed transition-all duration-200"
-                            )}
-                          />
-                          <div className="relative" ref={attachMenuBottomRef}>
-                      <Button
-                        variant="ghost"
-                        aria-label="Attach"
-                              className={cn(
-                                "shrink-0 h-12 w-12 p-0 rounded-xl transition-all duration-200 border shadow-sm",
-                                "bg-gradient-to-br from-white to-gray-50/80 border-gray-200/60",
-                                "hover:from-emerald-50 hover:to-emerald-100/50 hover:border-emerald-300/60 hover:shadow-md hover:scale-105",
-                                "active:scale-95 backdrop-blur-sm flex items-center justify-center"
-                              )}
-                              onClick={() => setShowAttachMenu(!showAttachMenu)}
-                            >
-                              <Paperclip className="h-5 w-5 text-gray-600 hover:text-emerald-700 transition-colors" />
-                            </Button>
-                            {showAttachMenu && (
-                              <div className="absolute bottom-full left-0 sm:left-0 mb-3 bg-white/95 backdrop-blur-md border border-gray-200/60 rounded-xl shadow-xl py-3 w-[220px] sm:min-w-[220px] z-50 animate-in slide-in-from-bottom-2 duration-200 -translate-x-1/2 sm:translate-x-0 overflow-hidden">
-                                <button
-                                  className="flex items-center gap-3 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gradient-to-r hover:from-blue-50 hover:to-blue-100/50 transition-all duration-200"
-                                  onClick={() => {
-                                    document.getElementById('file-input-bottom')?.click();
-                                    setShowAttachMenu(false);
-                                  }}
-                                >
-                                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-100 to-blue-200/50 flex items-center justify-center shadow-sm">
-                                    <span className="text-lg">📁</span>
-                                  </div>
-                                  <div className="text-left">
-                                    <div className="font-medium text-gray-800">Upload files</div>
-                                    <div className="text-xs text-gray-500">Choose files from your device</div>
-                                  </div>
-                                </button>
-                                <button
-                                  className="flex items-center gap-3 w-full px-4 py-2 text-sm text-gray-700 hover:bg-gradient-to-r hover:from-green-50 hover:to-green-100/50 transition-all duration-200"
-                                  onClick={() => {
-                                    setShowUrlInput(true);
-                                    setShowAttachMenu(false);
-                                  }}
-                                >
-                                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-green-100 to-green-200/50 flex items-center justify-center shadow-sm">
-                                    <span className="text-lg">🔗</span>
-                                  </div>
-                                  <div className="text-left">
-                                    <div className="font-medium text-gray-800">Add from URL</div>
-                                    <div className="text-xs text-gray-500">Link to file or image online</div>
-                                  </div>
-                                </button>
-                              </div>
-                            )}
-                        <input
-                              id="file-input-bottom"
-                          type="file"
-                          multiple
-                          className="hidden"
-                          onChange={(e) => onFilesSelected(e.target.files)}
-                        />
-                          </div>
-                          {isGenerating && currentTaskId ? (
-                            <Button
-                              onClick={handleStopGeneration}
-                              aria-label="Stop generation"
-                              title="Stop generation (Esc)"
-                              className={cn(
-                                "shrink-0 h-12 w-12 p-0 rounded-xl transition-all duration-200 border shadow-sm",
-                                "bg-gradient-to-br from-red-50 to-red-100/60 border-red-200/70 text-red-600",
-                                "hover:from-red-100 hover:to-red-200/60 hover:border-red-300/70 hover:text-red-700 hover:shadow-md hover:scale-105",
-                                "active:scale-95 flex items-center justify-center relative"
-                              )}
-                            >
-                              <div className="relative">
-                                <Square className="h-5 w-5" />
-                                <span className="absolute -top-0.5 -right-0.5 h-2 w-2 bg-red-500 rounded-full animate-pulse" />
-                              </div>
-                      </Button>
-                          ) : (
-                      <Button
-                        onClick={onSend}
-                        disabled={sending || (!input.trim() && files.length === 0)}
-                        aria-label="Send"
-                              className={cn(
-                                "shrink-0 h-12 w-12 p-0 rounded-xl transition-all duration-200 shadow-md",
-                                "bg-gradient-to-br from-emerald-500 to-emerald-600 text-white border-0",
-                                "hover:from-emerald-600 hover:to-emerald-700 hover:shadow-lg hover:scale-105",
-                                "active:scale-95 disabled:from-gray-300 disabled:to-gray-400 disabled:shadow-sm disabled:scale-100",
-                                "flex items-center justify-center"
-                              )}
-                      >
-                        {sending ? (
-                          <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        ) : (
-                          <Send className="h-5 w-5" />
-                        )}
-                      </Button>
-                          )}
-                    </div>
-                        {showUrlInput && (
-                          <div className="mt-4 p-4 bg-gradient-to-r from-gray-50 to-gray-100/50 rounded-xl border border-gray-200/60 animate-in slide-in-from-top-2 duration-200">
-                            <div className="flex gap-3">
-                              <input
-                                type="url"
-                                value={urlInput}
-                                onChange={(e) => setUrlInput(e.target.value)}
-                                placeholder="Enter file URL (e.g., https://example.com/image.jpg)"
-                                className={cn(
-                                  "flex-1 px-4 py-3 bg-white border border-gray-200/60 rounded-xl text-sm",
-                                  "focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300",
-                                  "placeholder:text-gray-400 transition-all duration-200 shadow-sm"
-                                )}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') onUrlAdd();
-                                  if (e.key === 'Escape') {
-                                    setShowUrlInput(false);
-                                    setUrlInput("");
+                                      )
+                                    case "output-available":
+                                      return <div key={callId}>Confirmation result: {String(part.output)}</div>
+                                    case "output-error":
+                                      return <div key={callId}>Error: {part.errorText}</div>
                                   }
-                                }}
-                                autoFocus
-                              />
-                              <Button
-                                onClick={onUrlAdd}
-                                size="sm"
-                                disabled={!urlInput.trim()}
-                                className="px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 transition-all duration-200 shadow-sm hover:shadow-md hover:scale-105 active:scale-95"
-                              >
-                                <span className="flex items-center gap-1">
-                                  <span>Add</span>
-                                  <span className="text-xs opacity-75">✓</span>
-                                </span>
-                              </Button>
-                              <Button
-                                onClick={() => {
-                                  setShowUrlInput(false);
-                                  setUrlInput("");
-                                }}
-                                size="sm"
-                                variant="outline"
-                                className="px-4 rounded-xl border-gray-300 hover:bg-gray-50 transition-all duration-200 hover:scale-105 active:scale-95"
-                              >
-                                <span className="flex items-center gap-1">
-                                  <span>Cancel</span>
-                                  <span className="text-xs opacity-75">✕</span>
-                                </span>
-                              </Button>
-                            </div>
-                          </div>
-                        )}
-                    <AttachmentChips
-                      items={files}
-                      onRemove={(id) =>
-                        setFiles((prev) => prev.filter((f) => f.id !== id))
-                      }
-                    />
+                                  break
+                                }
+                                case "tool-getLocation": {
+                                  const callId = part.toolCallId
+                                  switch (part.state) {
+                                    case "input-streaming":
+                                      return <div key={callId}>Preparing location request...</div>
+                                    case "input-available":
+                                      return <div key={callId}>Getting location...</div>
+                                    case "output-available":
+                                      return <div key={callId}>Location: {part.output}</div>
+                                    case "output-error":
+                                      return <div key={callId}>Error: {part.errorText}</div>
+                                  }
+                                  break
+                                }
+                                default:
+                                  return null
+                              }
+                            })}
+                          </MessageBubble>
+                        ))}
                       </div>
+                    )}
                   </div>
                 </div>
-              )}
-            </div>
-              )}
 
-              {activeMainTab === 'products' && (
+                {messages.length > 0 && (
+                  <div
+                    className={cn("p-3 sm:p-4 border-b mx-4 border-l border-r", "border-t bg-background", "relative")}
+                    onDragEnter={(e) => {
+                      e.preventDefault()
+                      setDrag("over")
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault()
+                      setDrag("over")
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault()
+                      setDrag("idle")
+                    }}
+                    onDrop={onDrop}
+                  >
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-end gap-2">
+                        <Textarea
+                          value={input}
+                          onChange={(e) => setInput(e.target.value)}
+                          onKeyDown={handleKeyDown}
+                          placeholder="Type a message or drop files here…"
+                          className="min-h-[56px] max-h-[160px] resize-y"
+                        />
+                        <Button
+                          variant="ghost"
+                          className="shrink-0 h-10 px-2 sm:px-4"
+                          onClick={() => document.getElementById("file-input-bottom")?.click()}
+                        >
+                          <input
+                            id="file-input-bottom"
+                            type="file"
+                            multiple
+                            className="hidden"
+                            onChange={(e) => onFilesSelected(e.target.files)}
+                          />
+                          <Paperclip className="h-4 w-4" />
+                          <span className="hidden sm:inline ml-2">{"Add attachments"}</span>
+                        </Button>
+                        <Button
+                          onClick={onSend}
+                          disabled={sending || (!input.trim() && files.length === 0)}
+                          className="shrink-0 h-10"
+                        >
+                          <Send className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <AttachmentChips
+                        items={files}
+                        onRemove={(id) => setFiles((prev) => prev.filter((f) => f.id !== id))}
+                      />
+                      {drag === "over" ? (
+                        <div className="pointer-events-none absolute inset-0 rounded-lg border-2 border-dashed border-emerald-400 bg-emerald-50/50" />
+                      ) : null}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeMainTab === "products" && (
             <div className="flex-1 flex flex-col p-6 overflow-y-auto mx-auto w-full max-w-5xl">
               <h2 className="text-xl font-semibold mb-4">Product Management</h2>
               <p className="text-muted-foreground mb-4">
-                Upload your product list, and Darwin will automatically generate optimized listings and publish them across supported e-commerce platforms.
+                Display all products listed by Agents, including product sources, inventory status, logistics progress
+                and quantities.
               </p>
-              <div className="border rounded-lg p-4 bg-white flex-1 flex items-center justify-center text-center text-muted-foreground">
-                <p>Product listing and management features will appear here.</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+                <div className="border rounded-lg p-4 bg-white">
+                  <h3 className="font-medium mb-2">Total Products</h3>
+                  <p className="text-2xl font-bold text-emerald-600">1,234</p>
+                  <p className="text-sm text-muted-foreground">+56 this month</p>
+                </div>
+                <div className="border rounded-lg p-4 bg-white">
+                  <h3 className="font-medium mb-2">Inventory Status</h3>
+                  <p className="text-2xl font-bold text-blue-600">89%</p>
+                  <p className="text-sm text-muted-foreground">Products in stock</p>
+                </div>
+                <div className="border rounded-lg p-4 bg-white">
+                  <h3 className="font-medium mb-2">Logistics Progress</h3>
+                  <p className="text-2xl font-bold text-orange-600">156</p>
+                  <p className="text-sm text-muted-foreground">Pending shipments</p>
+                </div>
+              </div>
+              <div className="border rounded-lg p-4 bg-white flex-1">
+                <h3 className="font-medium mb-4">Product List</h3>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between p-3 border rounded">
+                    <div>
+                      <h4 className="font-medium">Smart Phone Case</h4>
+                      <p className="text-sm text-muted-foreground">Source: Agent Discovery | Stock: 500 units</p>
+                    </div>
+                    <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-sm">Normal</span>
+                  </div>
+                  <div className="flex items-center justify-between p-3 border rounded">
+                    <div>
+                      <h4 className="font-medium">Wireless Bluetooth Earphones</h4>
+                      <p className="text-sm text-muted-foreground">Source: User Listed | Stock: 120 units</p>
+                    </div>
+                    <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-sm">Low Stock</span>
+                  </div>
+                  <div className="flex items-center justify-between p-3 border rounded">
+                    <div>
+                      <h4 className="font-medium">Portable Power Bank</h4>
+                      <p className="text-sm text-muted-foreground">Source: Agent Recommendation | Stock: 300 units</p>
+                    </div>
+                    <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-sm">Normal</span>
+                  </div>
+                </div>
               </div>
             </div>
           )}
 
-              {activeMainTab === 'marketing' && (
-            <div className="flex-1 flex flex-col p-6 overflow-y-auto mx-auto w-full max-w-5xl">
-              <h2 className="text-xl font-semibold mb-4">Marketing & Promotion</h2>
-              <p className="text-muted-foreground mb-4">
-                Darwin designs and executes data-driven marketing strategies, auto-generates engaging promotional content, and builds content commerce funnels.
-              </p>
-              <div className="border rounded-lg p-4 bg-white flex-1 flex items-center justify-center text-center text-muted-foreground">
-                <p>Marketing campaign and social media features will appear here.</p>
+          {activeMainTab === "marketing" && (
+            <div className="flex-1 flex flex-col overflow-y-auto">
+              {/* Header with Quick Actions */}
+              <div className="border-b bg-white p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h2 className="text-xl font-semibold">Marketing Automation Center</h2>
+                    <p className="text-muted-foreground">
+                      AI-powered marketing campaigns across social media and email channels
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm">
+                      <Settings className="h-4 w-4 mr-2" />
+                      Campaign Settings
+                    </Button>
+                    <Button size="sm">Create Campaign</Button>
+                  </div>
+                </div>
+
+                {/* Real-time Performance Overview */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="text-center p-3 border rounded-lg bg-gradient-to-r from-purple-50 to-purple-100">
+                    <p className="text-2xl font-bold text-purple-600">24</p>
+                    <p className="text-sm text-muted-foreground">Posts Today</p>
+                    <p className="text-xs text-green-600">+12% vs yesterday</p>
+                  </div>
+                  <div className="text-center p-3 border rounded-lg bg-gradient-to-r from-blue-50 to-blue-100">
+                    <p className="text-2xl font-bold text-blue-600">1,247</p>
+                    <p className="text-sm text-muted-foreground">Emails Sent</p>
+                    <p className="text-xs text-green-600">24.3% open rate</p>
+                  </div>
+                  <div className="text-center p-3 border rounded-lg bg-gradient-to-r from-green-50 to-green-100">
+                    <p className="text-2xl font-bold text-green-600">4.8%</p>
+                    <p className="text-sm text-muted-foreground">Engagement Rate</p>
+                    <p className="text-xs text-green-600">+0.7% this week</p>
+                  </div>
+                  <div className="text-center p-3 border rounded-lg bg-gradient-to-r from-orange-50 to-orange-100">
+                    <p className="text-2xl font-bold text-orange-600">$2,847</p>
+                    <p className="text-sm text-muted-foreground">Revenue Generated</p>
+                    <p className="text-xs text-green-600">3.2% conversion</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex-1 p-6 mx-auto w-full max-w-7xl">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Left Column - Social Media Marketing */}
+                  <div className="lg:col-span-1 space-y-6">
+                    <div className="border rounded-lg p-4 bg-white">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-semibold">Social Media</h3>
+                        <Button variant="outline" size="sm">
+                          View All Posts
+                        </Button>
+                      </div>
+
+                      {/* Platform Status */}
+                      <div className="space-y-3 mb-4">
+                        <div className="flex items-center justify-between p-2 border rounded">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                            <span className="text-sm font-medium">Twitter</span>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm font-medium">8 posts</p>
+                            <p className="text-xs text-muted-foreground">47 engagements</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between p-2 border rounded">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 bg-pink-500 rounded-full"></div>
+                            <span className="text-sm font-medium">Instagram</span>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm font-medium">6 posts</p>
+                            <p className="text-xs text-muted-foreground">89 engagements</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between p-2 border rounded bg-red-50">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
+                            <span className="text-sm font-medium">Facebook</span>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm font-medium text-red-600">Disconnected</p>
+                            <p className="text-xs text-muted-foreground">Needs reconnection</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Recent Posts Preview */}
+                      <div className="space-y-2">
+                        <h4 className="text-sm font-medium text-gray-700">Latest Auto Posts</h4>
+                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                          <div className="p-2 bg-gray-50 rounded text-xs">
+                            <div className="flex justify-between items-start mb-1">
+                              <span className="font-medium text-blue-600">Twitter</span>
+                              <span className="text-muted-foreground">2m ago</span>
+                            </div>
+                            <p className="text-gray-700">🚀 New Smart Phone Case with military-grade protection...</p>
+                          </div>
+                          <div className="p-2 bg-gray-50 rounded text-xs">
+                            <div className="flex justify-between items-start mb-1">
+                              <span className="font-medium text-pink-600">Instagram</span>
+                              <span className="text-muted-foreground">15m ago</span>
+                            </div>
+                            <p className="text-gray-700">✨ Wireless freedom with premium Bluetooth earphones...</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Marketing Strategies */}
+                    <div className="border rounded-lg p-4 bg-white">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-semibold">Active Strategies</h3>
+                        <Button variant="outline" size="sm">
+                          Manage
+                        </Button>
+                      </div>
+                      <div className="space-y-3">
+                        <div className="p-3 border rounded-lg bg-green-50">
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className="text-sm font-medium">Product Launch Campaign</h4>
+                            <span className="px-2 py-1 bg-green-100 text-green-700 text-xs rounded-full">Active</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mb-2">
+                            Auto-post new products with 20% discount promotion
+                          </p>
+                          <div className="flex justify-between text-xs">
+                            <span>Target: New customers</span>
+                            <span className="text-green-600">156 conversions</span>
+                          </div>
+                        </div>
+                        <div className="p-3 border rounded-lg bg-blue-50">
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className="text-sm font-medium">Engagement Boost</h4>
+                            <span className="px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded-full">Active</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mb-2">
+                            Daily interactive content to increase follower engagement
+                          </p>
+                          <div className="flex justify-between text-xs">
+                            <span>Target: All followers</span>
+                            <span className="text-blue-600">4.8% avg engagement</span>
+                          </div>
+                        </div>
+                        <div className="p-3 border rounded-lg bg-gray-50">
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className="text-sm font-medium">Seasonal Promotion</h4>
+                            <span className="px-2 py-1 bg-gray-100 text-gray-700 text-xs rounded-full">Scheduled</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mb-2">Holiday season campaign starting Dec 1st</p>
+                          <div className="flex justify-between text-xs">
+                            <span>Target: High-value customers</span>
+                            <span className="text-gray-600">Starts in 15 days</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Middle Column - Email Marketing */}
+                  <div className="lg:col-span-1 space-y-6">
+                    <div className="border rounded-lg p-4 bg-white">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-semibold">Email Marketing</h3>
+                        <Button variant="outline" size="sm">
+                          View Campaigns
+                        </Button>
+                      </div>
+
+                      {/* Email Performance */}
+                      <div className="grid grid-cols-2 gap-3 mb-4">
+                        <div className="text-center p-3 border rounded bg-blue-50">
+                          <p className="text-lg font-bold text-blue-600">24.3%</p>
+                          <p className="text-xs text-muted-foreground">Open Rate</p>
+                        </div>
+                        <div className="text-center p-3 border rounded bg-green-50">
+                          <p className="text-lg font-bold text-green-600">5.8%</p>
+                          <p className="text-xs text-muted-foreground">Click Rate</p>
+                        </div>
+                      </div>
+
+                      {/* Email Campaign Types */}
+                      <div className="space-y-3 mb-4">
+                        <div className="flex items-center justify-between p-2 border rounded">
+                          <div>
+                            <p className="text-sm font-medium">Welcome Series</p>
+                            <p className="text-xs text-muted-foreground">New subscriber onboarding</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm font-medium text-green-600">45.2%</p>
+                            <p className="text-xs text-muted-foreground">open rate</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between p-2 border rounded">
+                          <div>
+                            <p className="text-sm font-medium">Cart Recovery</p>
+                            <p className="text-xs text-muted-foreground">Abandoned cart reminders</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm font-medium text-orange-600">12.4%</p>
+                            <p className="text-xs text-muted-foreground">recovery rate</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between p-2 border rounded">
+                          <div>
+                            <p className="text-sm font-medium">Product Updates</p>
+                            <p className="text-xs text-muted-foreground">New arrivals & restocks</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm font-medium text-blue-600">18.7%</p>
+                            <p className="text-xs text-muted-foreground">click rate</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Recent Email Campaigns */}
+                      <div className="space-y-2">
+                        <h4 className="text-sm font-medium text-gray-700">Recent Campaigns</h4>
+                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                          <div className="p-2 bg-blue-50 rounded text-xs">
+                            <div className="flex justify-between items-start mb-1">
+                              <span className="font-medium">High-Value Customers</span>
+                              <span className="text-muted-foreground">30m ago</span>
+                            </div>
+                            <p className="text-gray-700 mb-1">Exclusive Early Access - New Tech Collection</p>
+                            <p className="text-muted-foreground">1,247 sent • 24.3% opened</p>
+                          </div>
+                          <div className="p-2 bg-green-50 rounded text-xs">
+                            <div className="flex justify-between items-start mb-1">
+                              <span className="font-medium">Cart Abandoners</span>
+                              <span className="text-muted-foreground">2h ago</span>
+                            </div>
+                            <p className="text-gray-700 mb-1">Don't Miss Out - Complete Your Purchase</p>
+                            <p className="text-muted-foreground">456 sent • 18.7% opened</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Email Strategies */}
+                    <div className="border rounded-lg p-4 bg-white">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-semibold">Email Strategies</h3>
+                        <Button variant="outline" size="sm">
+                          Create New
+                        </Button>
+                      </div>
+                      <div className="space-y-3">
+                        <div className="p-3 border rounded-lg bg-purple-50">
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className="text-sm font-medium">Customer Lifecycle</h4>
+                            <span className="px-2 py-1 bg-purple-100 text-purple-700 text-xs rounded-full">Active</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mb-2">
+                            Automated emails based on customer journey stage
+                          </p>
+                          <div className="flex justify-between text-xs">
+                            <span>7-email sequence</span>
+                            <span className="text-purple-600">89 active subscribers</span>
+                          </div>
+                        </div>
+                        <div className="p-3 border rounded-lg bg-orange-50">
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className="text-sm font-medium">Win-Back Campaign</h4>
+                            <span className="px-2 py-1 bg-orange-100 text-orange-700 text-xs rounded-full">Active</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mb-2">
+                            Re-engage inactive customers with special offers
+                          </p>
+                          <div className="flex justify-between text-xs">
+                            <span>3-email sequence</span>
+                            <span className="text-orange-600">234 targeted customers</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right Column - Analytics & Settings */}
+                  <div className="lg:col-span-1 space-y-6">
+                    {/* Performance Analytics */}
+                    <div className="border rounded-lg p-4 bg-white">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-semibold">Performance Analytics</h3>
+                        <Button variant="outline" size="sm">
+                          Full Report
+                        </Button>
+                      </div>
+
+                      {/* Weekly Performance */}
+                      <div className="space-y-4">
+                        <div>
+                          <div className="flex justify-between items-center mb-2">
+                            <span className="text-sm font-medium">Social Media Reach</span>
+                            <span className="text-sm text-green-600">+18%</span>
+                          </div>
+                          <div className="w-full bg-gray-200 rounded-full h-2">
+                            <div className="bg-purple-600 h-2 rounded-full" style={{ width: "78%" }}></div>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">12.4K impressions this week</p>
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between items-center mb-2">
+                            <span className="text-sm font-medium">Email Engagement</span>
+                            <span className="text-sm text-green-600">+12%</span>
+                          </div>
+                          <div className="w-full bg-gray-200 rounded-full h-2">
+                            <div className="bg-blue-600 h-2 rounded-full" style={{ width: "65%" }}></div>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">4.8% average engagement rate</p>
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between items-center mb-2">
+                            <span className="text-sm font-medium">Conversion Rate</span>
+                            <span className="text-sm text-green-600">+5%</span>
+                          </div>
+                          <div className="w-full bg-gray-200 rounded-full h-2">
+                            <div className="bg-green-600 h-2 rounded-full" style={{ width: "32%" }}></div>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">3.2% from marketing campaigns</p>
+                        </div>
+                      </div>
+
+                      {/* Top Performing Content */}
+                      <div className="mt-6">
+                        <h4 className="text-sm font-medium mb-3">Top Performing Content</h4>
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between p-2 bg-green-50 rounded">
+                            <span className="text-xs">Smart Phone Case Launch</span>
+                            <span className="text-xs font-medium text-green-600">156 conversions</span>
+                          </div>
+                          <div className="flex items-center justify-between p-2 bg-blue-50 rounded">
+                            <span className="text-xs">Bluetooth Earphones Review</span>
+                            <span className="text-xs font-medium text-blue-600">89 engagements</span>
+                          </div>
+                          <div className="flex items-center justify-between p-2 bg-purple-50 rounded">
+                            <span className="text-xs">Power Bank Comparison</span>
+                            <span className="text-xs font-medium text-purple-600">67 shares</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Quick Settings */}
+                    <div className="border rounded-lg p-4 bg-white">
+                      <h3 className="font-semibold mb-4">Quick Settings</h3>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between p-2 border rounded">
+                          <span className="text-sm">Auto-post new products</span>
+                          <div className="relative inline-flex h-6 w-11 items-center rounded-full bg-green-600">
+                            <span className="inline-block h-4 w-4 transform rounded-full bg-white transition translate-x-6"></span>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between p-2 border rounded">
+                          <span className="text-sm">Daily engagement posts</span>
+                          <div className="relative inline-flex h-6 w-11 items-center rounded-full bg-green-600">
+                            <span className="inline-block h-4 w-4 transform rounded-full bg-white transition translate-x-6"></span>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between p-2 border rounded">
+                          <span className="text-sm">Email welcome series</span>
+                          <div className="relative inline-flex h-6 w-11 items-center rounded-full bg-green-600">
+                            <span className="inline-block h-4 w-4 transform rounded-full bg-white transition translate-x-6"></span>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between p-2 border rounded">
+                          <span className="text-sm">Cart abandonment emails</span>
+                          <div className="relative inline-flex h-6 w-11 items-center rounded-full bg-green-600">
+                            <span className="inline-block h-4 w-4 transform rounded-full bg-white transition translate-x-6"></span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 pt-4 border-t">
+                        <Button variant="outline" className="w-full bg-transparent" size="sm">
+                          <Settings className="h-4 w-4 mr-2" />
+                          Advanced Settings
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Upcoming Campaigns */}
+                    <div className="border rounded-lg p-4 bg-white">
+                      <h3 className="font-semibold mb-4">Upcoming Campaigns</h3>
+                      <div className="space-y-3">
+                        <div className="p-3 border rounded-lg bg-yellow-50">
+                          <div className="flex items-center justify-between mb-1">
+                            <h4 className="text-sm font-medium">Black Friday Sale</h4>
+                            <span className="text-xs text-muted-foreground">Nov 24</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground">Multi-channel promotion campaign</p>
+                        </div>
+                        <div className="p-3 border rounded-lg bg-blue-50">
+                          <div className="flex items-center justify-between mb-1">
+                            <h4 className="text-sm font-medium">Holiday Collection</h4>
+                            <span className="text-xs text-muted-foreground">Dec 1</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground">New product line announcement</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           )}
 
-              {activeMainTab === 'crm' && (
+          {activeMainTab === "crm" && (
             <div className="flex-1 flex flex-col p-6 overflow-y-auto mx-auto w-full max-w-5xl">
-              <h2 className="text-xl font-semibold mb-4">CRM User Management</h2>
+              <h2 className="text-xl font-semibold mb-4">Customer Relationship Management</h2>
               <p className="text-muted-foreground mb-4">
-                Manage your buyer information, track interactions, and analyze customer data to enhance your e-commerce operations.
+                Aggregate all buyer information and Agent conversation records, support user profiling and customer
+                relationship management.
               </p>
-              <div className="border rounded-lg p-4 bg-white flex-1 flex items-center justify-center text-center text-muted-foreground">
-                <p>Buyer management features will appear here.</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <div className="border rounded-lg p-4 bg-white">
+                  <h3 className="font-medium mb-2">Total Customers</h3>
+                  <p className="text-2xl font-bold text-blue-600">2,847</p>
+                  <p className="text-sm text-muted-foreground">+234 this month</p>
+                </div>
+                <div className="border rounded-lg p-4 bg-white">
+                  <h3 className="font-medium mb-2">Active Customers</h3>
+                  <p className="text-2xl font-bold text-green-600">1,456</p>
+                  <p className="text-sm text-muted-foreground">Active in 30 days</p>
+                </div>
+                <div className="border rounded-lg p-4 bg-white">
+                  <h3 className="font-medium mb-2">Repeat Purchase Rate</h3>
+                  <p className="text-2xl font-bold text-purple-600">68%</p>
+                  <p className="text-sm text-muted-foreground">+5% vs last month</p>
+                </div>
+                <div className="border rounded-lg p-4 bg-white">
+                  <h3 className="font-medium mb-2">Customer Satisfaction</h3>
+                  <p className="text-2xl font-bold text-orange-600">4.6</p>
+                  <p className="text-sm text-muted-foreground">Out of 5.0</p>
+                </div>
+              </div>
+              <div className="border rounded-lg p-4 bg-white flex-1">
+                <h3 className="font-medium mb-4">Customer List</h3>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between p-3 border rounded">
+                    <div>
+                      <h4 className="font-medium">John Smith</h4>
+                      <p className="text-sm text-muted-foreground">
+                        VIP Customer | Total Spent: $1,258 | Last Chat: 2 hours ago
+                      </p>
+                    </div>
+                    <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-sm">High Value</span>
+                  </div>
+                  <div className="flex items-center justify-between p-3 border rounded">
+                    <div>
+                      <h4 className="font-medium">Sarah Johnson</h4>
+                      <p className="text-sm text-muted-foreground">
+                        Regular Customer | Total Spent: $324 | Last Chat: 1 day ago
+                      </p>
+                    </div>
+                    <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-sm">Active</span>
+                  </div>
+                  <div className="flex items-center justify-between p-3 border rounded">
+                    <div>
+                      <h4 className="font-medium">Mike Wilson</h4>
+                      <p className="text-sm text-muted-foreground">
+                        New Customer | Total Spent: $58 | Last Chat: 3 days ago
+                      </p>
+                    </div>
+                    <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-sm">New Customer</span>
+                  </div>
+                </div>
               </div>
             </div>
-              )}
-            </>
+          )}
+
+          {activeMainTab === "risk" && (
+            <div className="flex-1 flex flex-col p-6 overflow-y-auto mx-auto w-full max-w-5xl">
+              <h2 className="text-xl font-semibold mb-4">Cross-border Compliance Management</h2>
+              <p className="text-muted-foreground mb-4">
+                Record product listing status in different regions, display regional e-commerce platform requirements
+                and product compliance qualifications.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+                <div className="border rounded-lg p-4 bg-white">
+                  <h3 className="font-medium mb-2">Compliant Products</h3>
+                  <p className="text-2xl font-bold text-green-600">892</p>
+                  <p className="text-sm text-muted-foreground">Approved</p>
+                </div>
+                <div className="border rounded-lg p-4 bg-white">
+                  <h3 className="font-medium mb-2">Pending Review</h3>
+                  <p className="text-2xl font-bold text-yellow-600">45</p>
+                  <p className="text-sm text-muted-foreground">Awaiting platform approval</p>
+                </div>
+                <div className="border rounded-lg p-4 bg-white">
+                  <h3 className="font-medium mb-2">Risk Products</h3>
+                  <p className="text-2xl font-bold text-red-600">12</p>
+                  <p className="text-sm text-muted-foreground">Require remediation</p>
+                </div>
+              </div>
+              <div className="border rounded-lg p-4 bg-white flex-1">
+                <h3 className="font-medium mb-4">Regional Compliance Status</h3>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between p-3 border rounded">
+                    <div>
+                      <h4 className="font-medium">US Market</h4>
+                      <p className="text-sm text-muted-foreground">
+                        FDA Certified: 85% | FCC Certified: 92% | Tariff Classification: Complete
+                      </p>
+                    </div>
+                    <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-sm">Good</span>
+                  </div>
+                  <div className="flex items-center justify-between p-3 border rounded">
+                    <div>
+                      <h4 className="font-medium">EU Market</h4>
+                      <p className="text-sm text-muted-foreground">
+                        CE Certified: 78% | ROHS Certified: 88% | GDPR Compliant: Complete
+                      </p>
+                    </div>
+                    <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-sm">Needs Improvement</span>
+                  </div>
+                  <div className="flex items-center justify-between p-3 border rounded">
+                    <div>
+                      <h4 className="font-medium">Japan Market</h4>
+                      <p className="text-sm text-muted-foreground">
+                        PSE Certified: 95% | JIS Standard: 90% | Package Labeling: Complete
+                      </p>
+                    </div>
+                    <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-sm">Excellent</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeMainTab === "stores" && (
+            <div className="flex-1 flex flex-col p-6 overflow-y-auto mx-auto w-full max-w-5xl">
+              <h2 className="text-xl font-semibold mb-4">Store Management</h2>
+              <p className="text-muted-foreground mb-4">
+                Display basic information of Agent-operated stores, including store positioning, main categories, and
+                operational strategies.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <div className="border rounded-lg p-4 bg-white">
+                  <h3 className="font-medium mb-2">Total Stores</h3>
+                  <p className="text-2xl font-bold text-blue-600">8</p>
+                  <p className="text-sm text-muted-foreground">Across 5 platforms</p>
+                </div>
+                <div className="border rounded-lg p-4 bg-white">
+                  <h3 className="font-medium mb-2">Active Stores</h3>
+                  <p className="text-2xl font-bold text-green-600">7</p>
+                  <p className="text-sm text-muted-foreground">Currently operating</p>
+                </div>
+                <div className="border rounded-lg p-4 bg-white">
+                  <h3 className="font-medium mb-2">Monthly Revenue</h3>
+                  <p className="text-2xl font-bold text-purple-600">$240K</p>
+                  <p className="text-sm text-muted-foreground">+15% vs last month</p>
+                </div>
+                <div className="border rounded-lg p-4 bg-white">
+                  <h3 className="font-medium mb-2">Average Rating</h3>
+                  <p className="text-2xl font-bold text-orange-600">4.7</p>
+                  <p className="text-sm text-muted-foreground">Out of 5.0</p>
+                </div>
+              </div>
+              <div className="border rounded-lg p-4 bg-white flex-1">
+                <h3 className="font-medium mb-4">Store List</h3>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between p-3 border rounded">
+                    <div>
+                      <h4 className="font-medium">Darwin Digital Flagship Store</h4>
+                      <p className="text-sm text-muted-foreground">
+                        Platform: Tmall | Position: Premium Digital | Monthly Sales: $68K | Main: Phone Accessories
+                      </p>
+                    </div>
+                    <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-sm">Excellent</span>
+                  </div>
+                  <div className="flex items-center justify-between p-3 border rounded">
+                    <div>
+                      <h4 className="font-medium">Darwin Lifestyle Store</h4>
+                      <p className="text-sm text-muted-foreground">
+                        Platform: JD.com | Position: Home & Living | Monthly Sales: $42K | Main: Home Products
+                      </p>
+                    </div>
+                    <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-sm">Good</span>
+                  </div>
+                  <div className="flex items-center justify-between p-3 border rounded">
+                    <div>
+                      <h4 className="font-medium">Darwin Global Store</h4>
+                      <p className="text-sm text-muted-foreground">
+                        Platform: Amazon | Position: Cross-border E-commerce | Monthly Sales: $45K | Main: Consumer
+                        Electronics
+                      </p>
+                    </div>
+                    <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-sm">Needs Optimization</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       </div>
 
       <footer className="w-full border-t">
         <div className="mx-auto max-w-5xl px-4 py-3 text-xs text-muted-foreground flex items-center justify-between">
-          <span>{"© "} {new Date().getFullYear()} {" Darwin"}</span>
-          <span>{"A Multi-Agent AI System for Autonomous E-commerce Operations\n"}</span>
+          <span>
+            {"© "} {new Date().getFullYear()} {" Darwin"}
+          </span>
+          <span>{"A Multi-Agent AI System for Autonomous E-commerce Operations"}</span>
         </div>
       </footer>
     </main>
-  );
+  )
 }

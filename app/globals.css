@@ -75,6 +75,8 @@
 }
 
 @theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -116,9 +118,6 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
-  }
-  html {
-    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
   }
   body {
     @apply bg-background text-foreground;
